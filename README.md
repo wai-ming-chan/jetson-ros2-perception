@@ -145,6 +145,14 @@ Measured on the hardware above. *(To be filled as pipeline variants land.)*
 | Passthrough | V4L2 raw + CUDA debayer | 1920x1080 | 15W | — | — |
 | + TensorRT FP16 | Argus | 1920x1080 | 15W | — | — |
 
+**Model inference** (YOLOv8n, `trtexec`, batch 1, 640×640, TensorRT 8.5.2, 15W —
+engines built on-device):
+
+| Precision | GPU compute (median) | Throughput | Engine size |
+|---|---|---|---|
+| FP16 | **7.52 ms** | 130.5 qps | 8.1 MB |
+| FP32 | 13.39 ms | 72.9 qps | 14 MB |
+
 Rates are measured **publisher-side**, by the node counting its own frames. `ros2 topic hz`
 under-reports badly here — it is a Python subscriber deserialising ~6.2 MB per frame, so it
 measures its own throughput, not the pipeline's. It read 47.8 Hz against an actual 60.0 Hz.
