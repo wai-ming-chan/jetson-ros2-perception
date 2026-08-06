@@ -38,8 +38,15 @@ mkdir -p "$CAPTURES"
 
 # X11 forwarding, for tools that need a window -- cameracalibrator above all, since its
 # whole interface is an OpenCV window. Only wired up when a display actually exists, so
-# headless runs are unaffected. On the host you may need to allow local connections once:
-#     xhost +local:root
+# headless runs are unaffected.
+#
+# Set DISPLAY and XAUTHORITY on the HOST before running this script; they are read here to
+# decide what to mount. For the local GNOME desktop:
+#     export DISPLAY=:1 XAUTHORITY=/run/user/$(id -u)/gdm/Xauthority
+#
+# Mounting the cookie is enough on its own -- `xhost +local:root` is NOT required, and is
+# worth avoiding since it disables access control for every local process. Reach for it
+# only if a cookie genuinely cannot be located.
 GUI_ARGS=()
 if [ -n "${DISPLAY:-}" ]; then
     GUI_ARGS+=(-e "DISPLAY=$DISPLAY")
