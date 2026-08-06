@@ -1,10 +1,25 @@
 # jetson-ros2-perception
 
-ROS 2 perception and deployment stack, validated on NVIDIA Jetson hardware.
+A containerised ROS 2 stack that takes an IMX477 camera from raw sensor output to published
+ROS topics on an NVIDIA Jetson — and measures what it actually costs to run there.
 
-> **Scope:** this is a deployment stack running on real Jetson hardware.
-> Yet, it is not deployed on a mobile robot, there is no drivetrain and no autonomous navigation.
-> Every number below was measured on the device described in real *Hardware*, not in simulation.
+The camera is driven through the Jetson's hardware ISP and published as
+`sensor_msgs/Image` and `CameraInfo`. Everything runs inside a Docker image pinned to this
+board's JetPack release, so the stack builds and starts reproducibly on a fresh device
+instead of depending on a hand-configured host. Throughput and latency are then measured
+on the board itself, across power modes and pipeline variants.
+
+The wider aim is the unglamorous half of robot software: getting sensors, drivers,
+containers and buses working together on constrained hardware, and proving it with numbers
+rather than claims.
+
+*In progress:* GPU preprocessing (CUDA debayer/undistort), TensorRT inference, a SocketCAN
+bridge for the carrier's isolated CAN FD port, and a rosbag2 record/replay harness wired
+into CI as a regression test.
+
+> **Scope:** this stack runs on real Jetson hardware, but it is not deployed on a mobile
+> robot — there is no drivetrain and no autonomous navigation. Every number below was
+> measured on the hardware described under *Hardware*, not in simulation.
 
 ## Hardware
 
