@@ -225,7 +225,9 @@ async function poll() {
                                                   : fmt(i.publisher_hz, ' Hz', 2);
     $('hz').className = 'v' + (i.publisher_hz === null ? ' warn' : '');
     $('rxhz').textContent = fmt(i.console_rx_hz, ' Hz', 2);
-    $('streamhz').textContent = live ? fmt(i.stream_hz, ' Hz', 1) : 'paused';
+    $('streamhz').textContent = live
+      ? fmt(i.stream_hz, ' Hz', 1) + (i.stream_clients > 1 ? ` (${i.stream_clients} clients)` : '')
+      : 'paused';
 
     $('calib').textContent = s.calibration.loaded ? 'loaded' : 'none';
     $('calib').className = 'v ' + (s.calibration.loaded ? 'ok' : 'warn');

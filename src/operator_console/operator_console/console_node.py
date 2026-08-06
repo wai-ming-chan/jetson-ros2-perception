@@ -17,6 +17,7 @@ each extra dependency would mean a source build.
 
 import collections
 import json
+import select
 import mimetypes
 import os
 import socket
@@ -282,7 +283,24 @@ class OperatorConsole(Node):
         self.rate_topic = self.declare_parameter(
             "rate_topic", "/argus_camera/publish_rate").value
 
+        self.max_streams = int(self.declare_parameter("max_streams", 2).value)
+        # Seconds a client may go without accepting data before we hang up. A
+        # browser that navigates away can leave a socket whose buffer stays full:
+        # select() then reports "not writable" forever, and because the loop never
+        # attempts a write it never sees BrokenPipeError either, so without this it
+        # spins for the life of the process holding a stream slot.
+        self.stream_stall_timeout = float(self.declare_parameter(
+            "stream_stall_timeout", 5.0,
+            ParameterDescriptor(dynamic_typing=True)).value)
         self.state = State(can_history=self.declare_parameter("can_history", 200).value)
+
+        # Every page load opens another /stream.mjpg connection, and a browser does not
+        # always close the old one promptly. Without a bound, each stale connection keeps
+        # an encoder thread busy: seven connections and 24 threads were observed after a
+        # handful of reloads. Retire the oldest beyond max_streams.
+        self._streams = collections.OrderedDict()
+        self._stream_lock = threading.Lock()
+        self._stream_seq = 0
 
         # Best-effort, depth 1. A reliable subscriber would queue 6 MB messages faster than
         # Python can drain them; for a viewer, the newest frame is the only one that
@@ -308,6 +326,25 @@ class OperatorConsole(Node):
         self.get_logger().info(
             "operator console on http://0.0.0.0:{} (image={}, can={})".format(
                 self.port, self.image_topic, self.can_interface))
+
+    def register_stream(self):
+        with self._stream_lock:
+            self._stream_seq += 1
+            sid = self._stream_seq
+            self._streams[sid] = threading.Event()
+            while len(self._streams) > self.max_streams:
+                old_sid, old_ev = next(iter(self._streams.items()))
+                old_ev.set()
+                del self._streams[old_sid]
+            return sid, self._streams[sid]
+
+    def unregister_stream(self, sid):
+        with self._stream_lock:
+            self._streams.pop(sid, None)
+
+    def active_streams(self):
+        with self._stream_lock:
+            return len(self._streams)
 
     def _info_topic(self):
         base = self.image_topic.rsplit("/", 1)[0]
@@ -445,6 +482,7 @@ class OperatorConsole(Node):
             }
         payload["image"]["console_rx_hz"] = round(st.image_hz(), 2)
         payload["image"]["stream_hz"] = round(deque_hz(st.stream_times, st.lock), 2)
+        payload["image"]["stream_clients"] = self.active_streams()
         payload["host"] = {
             "cpu": cpu_percent(), "gpu": gpu_percent(),
             "power": power_mode(), "temp": soc_temp_c(),
@@ -562,30 +600,59 @@ def make_handler(node):
             self.wfile.write(jpeg)
 
         def _stream(self):
-            """multipart/x-mixed-replace MJPEG.
+            """multipart/x-mixed-replace MJPEG, with frames DROPPED rather than queued.
 
-            Rate-limited by the stream_fps parameter (default 30). Only sends when the
-            frame counter has advanced, so a stalled camera does not spin.
+            The naive loop writes every frame regardless of whether the client is keeping
+            up. Anything the client has not drained sits in the kernel send buffer, which
+            defaults to as much as 4 MB here -- over a hundred JPEGs. MJPEG is displayed in
+            order, so the viewer falls steadily further behind: observed as several seconds
+            of lag, with 230 KB already queued on one socket.
+
+            Two changes bound it. The send buffer is capped so the kernel cannot hoard
+            frames, and the socket is polled for writability before each send; when the
+            client is behind, the frame is discarded instead of buffered. For a live view,
+            a dropped frame is always better than a stale one.
             """
+            sid, cancelled = node.register_stream()
+            sock = self.connection
+            try:
+                # Small enough that only a frame or two can be in flight. The kernel
+                # doubles the requested value.
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 128 * 1024)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except OSError:
+                pass
+
             self.send_response(200)
             self.send_header("Age", "0")
             self.send_header("Cache-Control", "no-cache, private")
             self.send_header("Pragma", "no-cache")
-            self.send_header("Content-Type",
-                             "multipart/x-mixed-replace; boundary=FRAME")
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=FRAME")
             self.end_headers()
+
             last_seq = -1
             min_interval = 1.0 / max(1.0, float(node.stream_fps))
             next_send = 0.0
+            stalled_since = None
             try:
-                while True:
+                while not cancelled.is_set():
                     now = time.monotonic()
                     if now < next_send:
-                        # Poll finely rather than sleeping a whole frame interval, so a
-                        # fresh frame goes out as soon as it is allowed to. A fixed sleep
-                        # here added up to a full interval of latency on every frame.
                         time.sleep(min(0.002, next_send - now))
                         continue
+
+                    # Writable means the send buffer has drained. If it has not, the client
+                    # is behind: skip this frame rather than adding to the backlog. If it
+                    # stays unwritable past the timeout the client is gone, not merely
+                    # slow, so hang up and free the slot.
+                    if not select.select([], [sock], [], 0)[1]:
+                        if stalled_since is None:
+                            stalled_since = now
+                        elif now - stalled_since > node.stream_stall_timeout:
+                            break
+                        time.sleep(0.002)
+                        continue
+                    stalled_since = None
 
                     jpeg, seq = node.encode_stream_frame()
                     if jpeg is None or seq == last_seq:
@@ -602,8 +669,10 @@ def make_handler(node):
                     self.end_headers()
                     self.wfile.write(jpeg)
                     self.wfile.write(b"\r\n")
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, OSError):
                 pass                  # browser navigated away; normal
+            finally:
+                node.unregister_stream(sid)
 
     return Handler
 
