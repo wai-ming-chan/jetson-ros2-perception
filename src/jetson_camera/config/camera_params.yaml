@@ -24,6 +24,13 @@
     exposure_time_range: ""
     gain_range: ""
 
-    # Set once intrinsics are calibrated, e.g.
-    # camera_info_url: "file:///workspace/src/jetson_camera/config/imx477_1080p.yaml"
-    camera_info_url: ""
+    # Where camera_info_manager reads intrinsics from -- and, critically, where
+    # cameracalibrator's COMMIT button writes them.
+    #
+    # This MUST point at a mounted volume. The default (~/.ros/camera_info/imx477.yaml)
+    # lives inside the container, and docker/run.sh runs with --rm, so a successful
+    # calibration would be destroyed the moment the container exits. /workspace is the
+    # repo bind-mount, so writes land in git-tracked source on the host.
+    #
+    # The file need not exist yet -- the node warns on every launch until it does.
+    camera_info_url: "file:///workspace/src/jetson_camera/config/imx477.yaml"
