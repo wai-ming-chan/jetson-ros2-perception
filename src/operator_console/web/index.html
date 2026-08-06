@@ -137,7 +137,7 @@
       <div class="kv"><span class="k">Resolution</span><span class="v" id="res">—</span></div>
       <div class="kv"><span class="k">Publisher rate</span><span class="v" id="hz">—</span></div>
       <div class="kv"><span class="k">Stream to browser</span><span class="v" id="streamhz"
-        title="Frames per second actually pushed to this browser. Capped by the stream_fps parameter (default 30), not by encoder speed: measured cost is ~7.4 ms/frame, so ~117 fps is achievable.">—</span></div>
+        title="Measured in this browser: one JPEG is requested, decoded, then the next is requested. Self-paced, so it cannot fall behind the server.">—</span></div>
       <div class="kv"><span class="k">Console rx rate</span><span class="v" id="rxhz"
         title="Rate this console receives frames. Lower than the publisher rate is expected: it is a Python subscriber and drops stale frames rather than queueing them.">—</span></div>
       <div class="kv"><span class="k">Encoding</span><span class="v" id="enc">—</span></div>
@@ -196,17 +196,46 @@ const fmt = (v, unit = '', dp = 1) =>
   (v === null || v === undefined) ? '—' : (typeof v === 'number' ? v.toFixed(dp) : v) + unit;
 const chip = (el, val) => { $(el).querySelector('b').textContent = val; };
 
-// The MJPEG stream is a plain <img>; the browser holds the multipart connection open
-// until the src changes. Pausing swaps in a single still from /frame.jpg, which closes
-// that connection and keeps the layout from collapsing to an empty box.
+// Frame delivery: request one JPEG, wait for it to load, then request the next.
+//
+// This replaced a multipart/x-mixed-replace MJPEG stream. That approach pushes frames at
+// the browser whether or not it is consuming them; when the browser stops draining -- and
+// Safari does exactly that with multipart <img> -- the server's socket backs up, frames
+// arrive stale, and the view freezes. Observed: streams dying after 7-43 frames with the
+// socket unwritable, while a localhost client on the same server sustained 620.
+//
+// A self-paced loop cannot fall behind: the next request is only issued once the previous
+// image has decoded, so the browser sets the rate and there is never a backlog anywhere.
+// It costs one HTTP round trip per frame, which on this link is under a millisecond.
 let live = true;
+let frameTimes = [];
+
+function pump() {
+  if (!live) return;
+  const img = new Image();
+  img.onload = () => {
+    $('video').src = img.src;
+    const now = performance.now();
+    frameTimes.push(now);
+    if (frameTimes.length > 30) frameTimes.shift();
+    if (live) requestAnimationFrame(pump);   // yields to the renderer between frames
+  };
+  img.onerror = () => { if (live) setTimeout(pump, 500); };
+  img.src = '/frame.jpg?t=' + Date.now();
+}
+
+function browserFps() {
+  if (frameTimes.length < 2) return 0;
+  const span = (frameTimes[frameTimes.length - 1] - frameTimes[0]) / 1000;
+  return span > 0 ? (frameTimes.length - 1) / span : 0;
+}
 
 function setLive(on) {
   live = on;
-  $('video').src = on ? '/stream.mjpg' : '/frame.jpg?t=' + Date.now();
   $('livebtn').textContent  = on ? 'Stop live' : 'Go live';
   $('livebtn').className    = on ? '' : 'primary';
   $('livehint').textContent = on ? '' : 'paused — showing last frame';
+  if (on) { frameTimes = []; pump(); }
 }
 
 let recording = false;
@@ -225,9 +254,7 @@ async function poll() {
                                                   : fmt(i.publisher_hz, ' Hz', 2);
     $('hz').className = 'v' + (i.publisher_hz === null ? ' warn' : '');
     $('rxhz').textContent = fmt(i.console_rx_hz, ' Hz', 2);
-    $('streamhz').textContent = live
-      ? fmt(i.stream_hz, ' Hz', 1) + (i.stream_clients > 1 ? ` (${i.stream_clients} clients)` : '')
-      : 'paused';
+    $('streamhz').textContent = live ? fmt(browserFps(), ' Hz', 1) : 'paused';
 
     $('calib').textContent = s.calibration.loaded ? 'loaded' : 'none';
     $('calib').className = 'v ' + (s.calibration.loaded ? 'ok' : 'warn');
