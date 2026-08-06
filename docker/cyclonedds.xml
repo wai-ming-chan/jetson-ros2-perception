@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CycloneDDS tuning for large messages (raw 1080p bgr8 frames are 6.2 MB).
+
+  The kernel default socket buffer (net.core.rmem_max = 208 KB) holds 1/30th of one
+  frame. Symptoms measured on this board before tuning: best-effort subscribers to
+  /image_raw received NOTHING (any lost UDP fragment drops the whole message), and
+  reliable subscribers limped at 3.2 Hz on retransmissions.
+
+  Both halves are required:
+    1. Host:  sysctl net.core.rmem_max / wmem_max raised (see docs; persisted via
+              /etc/sysctl.d/) -- the kernel must permit large buffers.
+    2. This file: Cyclone must request them. Wire it in with
+              CYCLONEDDS_URI=file:///workspace/docker/cyclonedds.xml
+              (docker/run.sh exports this automatically.)
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain Id="any">
+    <Internal>
+      <SocketReceiveBufferSize min="16MB"/>
+      <SocketSendBufferSize min="16MB"/>
+    </Internal>
+  </Domain>
+</CycloneDDS>

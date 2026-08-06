@@ -36,6 +36,8 @@ CAPTURES="${CAPTURES:-$HOME/captures}"
 
 # /var/lib/nvpmodel is mounted read-only so the operator console can report the
 # active power mode; without it the panel shows "unknown" rather than 15W/7W.
+# ~/models holds ONNX files and locally-built TensorRT engines (device-specific,
+# never committed); trt_detector loads its engine from /models.
 
 mkdir -p "$CAPTURES"
 
@@ -70,6 +72,7 @@ else
 fi
 
 exec docker run -it --rm \
+    -e CYCLONEDDS_URI=file:///workspace/docker/cyclonedds.xml \
     --network host \
     --ipc host \
     --device /dev/video0 \
@@ -77,6 +80,7 @@ exec docker run -it --rm \
     -v "$WORKSPACE:/workspace" \
     -v "$CAPTURES:/captures" \
     -v /var/lib/nvpmodel:/var/lib/nvpmodel:ro \
+    -v "$HOME/models:/models" \
     "${GUI_ARGS[@]}" \
     "$IMAGE" \
     "$@"

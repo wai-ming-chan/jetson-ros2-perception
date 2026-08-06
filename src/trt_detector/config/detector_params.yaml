@@ -1,0 +1,13 @@
+/**:
+  ros__parameters:
+    # Engines are device- and TensorRT-version-specific: built on the board with
+    #   trtexec --onnx=yolov8n.onnx --fp16 --saveEngine=/models/yolov8n_fp16.engine
+    # and mounted into the container (docker/run.sh mounts ~/models at /models).
+    # Never committed to git.
+    engine_path: "/models/yolov8n_fp16.engine"
+    image_topic: "/image_raw"
+    score_threshold: 0.35
+    nms_iou_threshold: 0.45
+    # Overlay is only encoded while ~/overlay/compressed has subscribers.
+    overlay_jpeg_quality: 70
+    rate_report_interval: 5.0

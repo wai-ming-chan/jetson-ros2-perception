@@ -129,8 +129,11 @@ Two details worth calling out:
 |---|---|
 | `jetson_camera` | Argus (hardware ISP) → `sensor_msgs/Image` + `CameraInfo` |
 
-Planned: `gpu_preproc` (CUDA debayer/undistort/resize), `trt_detector` (TensorRT
-inference), `can_bridge` (SocketCAN ↔ ROS 2), `bag_tools` (recorder + replay harness).
+| `trt_detector` | YOLOv8 via TensorRT → `Detection2DArray` + compressed overlay, per-stage latency instrumentation |
+
+Planned: `can_bridge` (SocketCAN ↔ `can_msgs`), `bag_tools` (recorder + replay harness).
+CUDA preprocessing was planned and measured out: at 4.0 ms on CPU against a 33 ms frame
+budget, a kernel would not pay for itself.
 
 ## Benchmarks
 
@@ -142,8 +145,8 @@ Measured on the hardware above. *(To be filled as pipeline variants land.)*
 | `/image_raw` (bgr8) | Argus (HW ISP) | 3840x2160@30 | 15W | **29.9** | 1.0 core, GPU idle |
 | ↳ same, `videoconvert n-threads=1` | Argus (HW ISP) | 3840x2160@30 | 15W | 26.9 | one core pinned at 74% |
 | `/image_raw` (bgr8) | Argus (HW ISP) | 1920x1080@60 | 7W | — | — |
-| Passthrough | V4L2 raw + CUDA debayer | 1920x1080 | 15W | — | — |
-| + TensorRT FP16 | Argus | 1920x1080 | 15W | — | — |
+| + TensorRT FP16 detection (`trt_detector`) | Argus | 1920x1080 | 15W | **29–30** (every frame) | 20.2 ms e2e: pre 4.0 + infer 12.1 + post 4.0; GPU 50% |
+| Camera publisher with a raw subscriber attached | Argus | 1920x1080@60 | 15W | 29.3 | DDS serialisation of 6.2 MB frames is the cost |
 
 **Model inference** (YOLOv8n, `trtexec`, batch 1, 640×640, TensorRT 8.5.2, 15W —
 engines built on-device):

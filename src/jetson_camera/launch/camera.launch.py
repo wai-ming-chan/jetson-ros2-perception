@@ -28,9 +28,14 @@ def generate_launch_description():
             name='argus_camera',
             parameters=[params_file],
             output='screen',
-            # The node now exits rather than lingering as a zombie when capture is
+            # The node exits rather than lingering as a zombie when capture is
             # unrecoverable; respawn turns that exit into a recovery attempt.
+            #
+            # The delay is deliberately long. nvargus-daemon garbage-collects a dead
+            # client's session slowly, and a 2 s respawn was observed to outrun that
+            # cleanup: every doomed attempt left another half-created session behind,
+            # digging the daemon deeper until only a host-side restart recovered it.
             respawn=True,
-            respawn_delay=2.0,
+            respawn_delay=15.0,
         ),
     ])
