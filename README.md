@@ -65,7 +65,8 @@ Two hardware constraints shape everything below:
 [`docs/runbook.md`](docs/runbook.md) — deployment and field debugging: first-time setup on
 a fresh device, a symptom index (camera won't start, subscriber receives nothing, Ethernet
 slower than Wi-Fi, CAN transmits nothing), and the platform quirks that cost time. Written
-from real incidents; `PROGRESS.md` holds the underlying evidence.
+from real incidents; [`PROGRESS.md`](PROGRESS.md) holds the underlying evidence —
+fourteen logged failures with root causes and the commands that found them.
 
 ## Why containers
 
@@ -165,7 +166,7 @@ only), `bag_tools` (recorder + replay regression harness).
 
 **Cancelled:** CUDA preprocessing. It was planned, then measured out — preprocessing costs
 4.0 ms on the CPU against a 33 ms frame budget, so a GPU kernel could not pay for itself.
-The measurement is in `PROGRESS.md`.
+The measurement is in [`PROGRESS.md`](PROGRESS.md).
 
 ## Benchmarks
 
@@ -210,6 +211,7 @@ measures its own throughput, not the pipeline's. It read 47.8 Hz against an actu
 docker/       Dockerfile, run.sh (the verified container flags), cyclonedds.xml
 deploy/       host settings as systemd units + sysctl (install.sh)
 docs/         runbook.md, demo media
+PROGRESS.md   engineering log: every measurement and failure, with commands
 src/          jetson_camera, trt_detector, operator_console, jetson_bringup
 ```
 
