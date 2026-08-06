@@ -76,11 +76,17 @@ inference), `can_bridge` (SocketCAN ↔ ROS 2), `bag_tools` (recorder + replay h
 
 Measured on the hardware above. *(To be filled as pipeline variants land.)*
 
-| Pipeline | Capture path | Resolution | Power | FPS | Latency (ms) |
+| Pipeline | Capture path | Resolution | Power | FPS | CPU |
 |---|---|---|---|---|---|
-| Passthrough | Argus (HW ISP) | 1920x1080 | 15W | — | — |
+| `/image_raw` (bgr8) | Argus (HW ISP) | 1920x1080@60 | 15W | **60.0** | 0.65 core, GPU idle |
+| `/image_raw` (bgr8) | Argus (HW ISP) | 3840x2160@30 | 15W | — | — |
+| `/image_raw` (bgr8) | Argus (HW ISP) | 1920x1080@60 | 7W | — | — |
 | Passthrough | V4L2 raw + CUDA debayer | 1920x1080 | 15W | — | — |
 | + TensorRT FP16 | Argus | 1920x1080 | 15W | — | — |
+
+Rates are measured **publisher-side**, by the node counting its own frames. `ros2 topic hz`
+under-reports badly here — it is a Python subscriber deserialising ~6.2 MB per frame, so it
+measures its own throughput, not the pipeline's. It read 47.8 Hz against an actual 60.0 Hz.
 
 ## License
 

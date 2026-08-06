@@ -47,6 +47,7 @@ public:
     // Argus auto-exposure needs a few frames to converge; the first frames come out
     // black or as full-scale noise. Dropping them avoids publishing garbage at startup.
     warmup_frames_ = declare_parameter<int>("warmup_frames", 30);
+    report_interval_s_ = declare_parameter<double>("rate_report_interval", 5.0);
     const auto camera_info_url = declare_parameter<std::string>("camera_info_url", "");
 
     camera_info_manager_ = std::make_shared<camera_info_manager::CameraInfoManager>(
@@ -133,7 +134,35 @@ private:
       }
 
       publish(sample);
+      report_rate();
       gst_sample_unref(sample);
+    }
+  }
+
+  // Publisher-side rate, logged periodically.
+  //
+  // This exists because `ros2 topic hz` cannot answer the question on its own: it is a
+  // Python subscriber deserialising ~6 MB per frame, so a low reading may mean the
+  // subscriber cannot keep up rather than that the pipeline is slow. Comparing this
+  // number against `ros2 topic hz` separates "we are not producing frames" from "the
+  // consumer cannot drink them fast enough".
+  void report_rate()
+  {
+    ++frames_since_report_;
+
+    const rclcpp::Time current = now();
+    if (last_report_.nanoseconds() == 0) {
+      last_report_ = current;
+      return;
+    }
+
+    const double elapsed = (current - last_report_).seconds();
+    if (elapsed >= report_interval_s_) {
+      RCLCPP_INFO(
+        get_logger(), "publisher: %.2f Hz (%ld frames in %.1f s)",
+        static_cast<double>(frames_since_report_) / elapsed, frames_since_report_, elapsed);
+      frames_since_report_ = 0;
+      last_report_ = current;
     }
   }
 
@@ -196,6 +225,9 @@ private:
   int framerate_{60};
   int flip_method_{0};
   int warmup_frames_{30};
+  double report_interval_s_{5.0};
+  int64_t frames_since_report_{0};
+  rclcpp::Time last_report_{0, 0, RCL_ROS_TIME};
   std::string frame_id_;
   std::string exposure_time_range_;
   std::string gain_range_;
