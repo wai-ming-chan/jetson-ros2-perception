@@ -1,21 +1,29 @@
 # jetson-ros2-perception
 
-A containerised ROS 2 stack that takes an IMX477 camera from raw sensor output to published
-ROS topics on an NVIDIA Jetson — and measures what it actually costs to run there.
+The software base layer a robot needs before any autonomy is possible — sensors
+publishing at full rate, drivers that recover instead of freezing, an industrial bus on
+the wire, one-click data capture, and a live view of what the machine sees — built and
+validated end to end on an NVIDIA Jetson.
 
-The camera is driven through the Jetson's hardware ISP and published as
-`sensor_msgs/Image` and `CameraInfo`. Everything runs inside a Docker image pinned to this
-board's JetPack release, so the stack builds and starts reproducibly on a fresh device
-instead of depending on a hand-configured host. Throughput and latency are then measured
-on the board itself, across power modes and pipeline variants.
+Concretely:
 
-The wider aim is the unglamorous half of robot software: getting sensors, drivers,
-containers and buses working together on constrained hardware, and proving it with numbers
-rather than claims.
+- **A camera as a robust ROS 2 driver** — IMX477 through the Jetson's hardware ISP to
+  `sensor_msgs/Image` at a sustained 1920×1080 @ 60 Hz, with watchdogs that rebuild the
+  capture pipeline on failure and exit visibly when recovery is impossible, so a
+  supervisor can act instead of a robot going silently blind.
+- **An operator console in the browser** — live camera, pipeline and host telemetry, CAN
+  frame injection and traffic view, and rosbag recording, all from one page served by the
+  headless board itself (demo below).
+- **Industrial I/O** — the carrier's isolated CAN FD port brought up under SocketCAN and
+  exercised end to end.
+- **Reproducible deployment** — everything runs from a Docker image pinned to the board's
+  JetPack release; a fresh device reaches "camera streaming" in a handful of commands.
+- **Measurement as a habit** — every rate and cost quoted here was measured on the board,
+  publisher-side, and the measurement traps found along the way are documented rather
+  than papered over.
 
-*In progress:* GPU preprocessing (CUDA debayer/undistort), TensorRT inference, a SocketCAN
-bridge for the carrier's isolated CAN FD port, and a rosbag2 record/replay harness wired
-into CI as a regression test.
+*Next:* TensorRT detection, CUDA preprocessing, a `can_msgs` bridge node, and a
+bag-replay regression harness in CI.
 
 > **Scope:** this stack runs on real Jetson hardware, but it is not deployed on a mobile
 > robot — there is no drivetrain and no autonomous navigation. Every number below was
