@@ -169,7 +169,7 @@ async function poll() {
     $('canif').textContent    = s.can.interface;
     $('canstate').textContent = s.can.status;
     $('cancount').textContent = s.can.count;
-    const up = s.can.status.startsWith('listening');
+    const up = s.can.status.startsWith('listening');   // set by can_reader on successful bind
     $('canstate').style.color = up ? 'var(--accent)' : 'var(--warn)';
     $('cansend').disabled = !up;
   } catch (e) {

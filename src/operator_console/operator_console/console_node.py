@@ -159,54 +159,65 @@ def disk_free_gb(path="/captures"):
 # --------------------------------------------------------------------------------------
 
 def can_reader(iface, state, stop_event):
-    """Read raw SocketCAN frames into state.
+    """Read raw SocketCAN frames into state, reconnecting as needed.
 
     Reads the socket directly rather than going through a ROS CAN message: can_msgs is not
     in this image, and adding a message package would pull in rosidl generation for a
     handful of fields. The dedicated bridge node can publish proper messages later; the
     console only needs to observe.
+
+    Retries rather than giving up: the console is routinely started before `can0` exists
+    (bringing the interface up needs root, and often happens after the stack is running),
+    and an operator panel that permanently reports "no such device" because of startup
+    ordering is useless.
     """
-    try:
-        sock = socket.socket(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-        sock.settimeout(0.5)
-        sock.bind((iface,))
-    except OSError as exc:
-        with state.lock:
-            state.can_status = "unavailable: {}".format(exc.strerror or exc)
-        return
-
-    with state.lock:
-        state.can_status = "listening on " + iface
-
     while not stop_event.is_set():
+        sock = None
         try:
-            raw = sock.recv(CAN_FRAME_SIZE)
-        except socket.timeout:
-            continue
+            sock = socket.socket(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
+            sock.settimeout(0.5)
+            sock.bind((iface,))
         except OSError as exc:
+            if sock is not None:
+                sock.close()
             with state.lock:
-                state.can_status = "read error: {}".format(exc)
-            return
-        if len(raw) < CAN_FRAME_SIZE:
+                state.can_status = "waiting for {} ({})".format(
+                    iface, exc.strerror or exc)
+            stop_event.wait(3.0)
             continue
 
-        can_id, length, data = struct.unpack(CAN_FRAME_FMT, raw)
-        extended = bool(can_id & CAN_EFF_FLAG)
-        entry = {
-            "id": "{:08X}".format(can_id & CAN_EFF_MASK) if extended
-                  else "{:03X}".format(can_id & CAN_SFF_MASK),
-            "ext": extended,
-            "rtr": bool(can_id & CAN_RTR_FLAG),
-            "err": bool(can_id & CAN_ERR_FLAG),
-            "dlc": length,
-            "data": data[:length].hex().upper(),
-            "t": round(time.monotonic(), 3),
-        }
         with state.lock:
-            state.can_frames.appendleft(entry)
-            state.can_count += 1
+            state.can_status = "listening on " + iface
 
-    sock.close()
+        while not stop_event.is_set():
+            try:
+                raw = sock.recv(CAN_FRAME_SIZE)
+            except socket.timeout:
+                continue
+            except OSError as exc:
+                with state.lock:
+                    state.can_status = "{} went away ({}); retrying".format(iface, exc)
+                break
+            if len(raw) < CAN_FRAME_SIZE:
+                continue
+
+            can_id, length, data = struct.unpack(CAN_FRAME_FMT, raw)
+            extended = bool(can_id & CAN_EFF_FLAG)
+            entry = {
+                "id": "{:08X}".format(can_id & CAN_EFF_MASK) if extended
+                      else "{:03X}".format(can_id & CAN_SFF_MASK),
+                "ext": extended,
+                "rtr": bool(can_id & CAN_RTR_FLAG),
+                "err": bool(can_id & CAN_ERR_FLAG),
+                "dlc": length,
+                "data": data[:length].hex().upper(),
+                "t": round(time.monotonic(), 3),
+            }
+            with state.lock:
+                state.can_frames.appendleft(entry)
+                state.can_count += 1
+
+        sock.close()
 
 
 def can_send(iface, can_id, payload, extended=False):
