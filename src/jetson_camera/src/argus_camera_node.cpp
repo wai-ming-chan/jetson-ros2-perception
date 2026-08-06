@@ -15,6 +15,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
+#include <future>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -313,16 +315,38 @@ private:
 
   void stop()
   {
-    // Join first: the capture thread's pull has a one second bound, so it notices
-    // running_ promptly, and only this thread ever touches the pipeline afterwards.
-    // (The previous version poked the pipeline from here while the capture thread was
-    // still using it, and its emit_signals call never unblocked anything anyway --
-    // only the state change to NULL did.)
     running_ = false;
-    if (capture_thread_.joinable()) {
-      capture_thread_.join();
+
+    // Graceful teardown can block FOREVER: gst_element_set_state(NULL) on
+    // nvarguscamerasrc is an RPC to nvargus-daemon, and when that daemon is wedged --
+    // its usual state after an Argus client has been SIGKILLed -- the call never
+    // returns. The capture thread can be stuck in exactly that call too (rebuild path),
+    // making the join below equally unbounded. That combination turned Ctrl-C into a
+    // hang. Run the clean path in a helper thread with a deadline; past it, exit
+    // without cleanup. The daemon is broken anyway, nothing here can fix it, and a
+    // fast death a supervisor can observe beats a process that ignores signals.
+    // Host-side recovery: `sudo systemctl restart nvargus-daemon`.
+    std::promise<void> done;
+    auto finished = done.get_future();
+    std::thread finisher(
+      [this, &done]() {
+        if (capture_thread_.joinable()) {
+          capture_thread_.join();
+        }
+        teardown_pipeline();
+        done.set_value();
+      });
+
+    if (finished.wait_for(std::chrono::seconds(5)) == std::future_status::ready) {
+      finisher.join();
+    } else {
+      RCLCPP_FATAL(
+        get_logger(),
+        "shutdown wedged -- nvargus-daemon is likely hung "
+        "(host: sudo systemctl restart nvargus-daemon); exiting without cleanup");
+      finisher.detach();
+      std::_Exit(1);
     }
-    teardown_pipeline();
   }
 
   int sensor_id_{0};
