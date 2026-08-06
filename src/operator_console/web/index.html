@@ -6,123 +6,184 @@
 <title>jetson-ros2-perception · operator console</title>
 <style>
   :root {
-    --bg:#0e1116; --panel:#161b22; --line:#2a313a; --text:#e6edf3; --dim:#8b949e;
-    --accent:#3fb950; --warn:#d29922; --bad:#f85149; --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2129; --line:#2a313a;
+    --text:#e6edf3; --dim:#8b949e; --faint:#6e7681;
+    --ok:#3fb950; --warn:#d29922; --bad:#f85149; --info:#58a6ff;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --r:10px;
   }
   @media (prefers-color-scheme: light) {
-    :root { --bg:#f6f8fa; --panel:#fff; --line:#d8dee4; --text:#1f2328; --dim:#656d76; }
+    :root { --bg:#f6f8fa; --panel:#fff; --panel2:#f6f8fa; --line:#d0d7de;
+            --text:#1f2328; --dim:#59636e; --faint:#818b98; }
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
-         font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
-  header { display:flex; align-items:center; gap:12px; padding:12px 18px;
-           border-bottom:1px solid var(--line); background:var(--panel); }
-  header h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.2px; }
-  header .sub { color:var(--dim); font-size:12px; }
-  .dot { width:8px; height:8px; border-radius:50%; background:var(--bad); flex:none; }
-  .dot.on { background:var(--accent); box-shadow:0 0 8px var(--accent); }
-  main { display:grid; grid-template-columns:minmax(0,2fr) minmax(260px,1fr);
-         gap:14px; padding:14px; align-items:start; }
-  @media (max-width:900px){ main { grid-template-columns:1fr; } }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; }
-  .card h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em;
-             color:var(--dim); margin:0; padding:10px 14px; border-bottom:1px solid var(--line); }
-  .card .body { padding:12px 14px; }
-  #video { width:100%; display:block; background:#000; border-radius:0 0 8px 8px; }
-  .kv { display:flex; justify-content:space-between; gap:10px; padding:5px 0;
-        border-bottom:1px dashed var(--line); font-size:13px; }
+         font:13.5px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,sans-serif;
+         -webkit-font-smoothing:antialiased; }
+
+  header { display:flex; align-items:center; gap:10px; padding:10px 16px;
+           background:var(--panel); border-bottom:1px solid var(--line);
+           position:sticky; top:0; z-index:5; flex-wrap:wrap; }
+  .brand { font-weight:650; font-size:14px; letter-spacing:-.01em; }
+  .brand span { color:var(--dim); font-weight:400; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--bad); flex:none;
+         transition:background .3s, box-shadow .3s; }
+  .dot.on { background:var(--ok); box-shadow:0 0 0 3px rgba(63,185,80,.22); }
+  .chips { margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; }
+  .chip { font-family:var(--mono); font-size:11px; padding:3px 9px; border-radius:20px;
+          background:var(--panel2); border:1px solid var(--line); color:var(--dim);
+          white-space:nowrap; }
+  .chip b { color:var(--text); font-weight:600; }
+
+  main { display:grid; gap:12px; padding:12px;
+         grid-template-columns:minmax(0,1.55fr) minmax(300px,1fr);
+         grid-template-areas: "camera pipeline" "capture can" "traffic traffic"; }
+  #camera  { grid-area:camera; }
+  #pipeline{ grid-area:pipeline; }
+  #capture { grid-area:capture; }
+  #canbus  { grid-area:can; }
+  #traffic { grid-area:traffic; }
+  @media (max-width:960px) {
+    main { grid-template-columns:1fr;
+           grid-template-areas:"camera" "pipeline" "capture" "can" "traffic"; }
+  }
+
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+          display:flex; flex-direction:column; min-width:0; overflow:hidden; }
+  .card > h2 { margin:0; padding:9px 13px; font-size:10.5px; font-weight:600;
+               text-transform:uppercase; letter-spacing:.09em; color:var(--faint);
+               border-bottom:1px solid var(--line); display:flex; align-items:center;
+               gap:8px; flex:none; }
+  .card > h2 .tag { font-family:var(--mono); text-transform:none; letter-spacing:0;
+                    color:var(--dim); font-weight:400; }
+  .card > .body { padding:11px 13px; flex:1; min-height:0; }
+
+  /* The image flexes, so this card's height is driven by the Pipeline card beside it
+     rather than by the video's intrinsic size. object-fit keeps the aspect ratio. */
+  #camera .body { padding:0; display:flex; flex-direction:column; background:#000; }
+  #video { flex:1; min-height:0; width:100%; object-fit:contain; display:block; }
+  #camfoot { flex:none; display:flex; align-items:center; gap:7px; padding:8px 11px;
+             background:var(--panel); border-top:1px solid var(--line); flex-wrap:wrap; }
+
+  .kv { display:flex; justify-content:space-between; align-items:baseline; gap:10px;
+        padding:4.5px 0; border-bottom:1px solid rgba(128,136,150,.14); }
   .kv:last-child { border-bottom:0; }
-  .kv .k { color:var(--dim); }
-  .kv .v { font-family:var(--mono); }
-  .full { grid-column:1 / -1; }
-  table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px; }
-  th { text-align:left; color:var(--dim); font-weight:500; padding:4px 8px;
-       border-bottom:1px solid var(--line); font-size:11px; text-transform:uppercase; }
-  td { padding:3px 8px; border-bottom:1px solid rgba(128,128,128,.12); white-space:nowrap; }
-  .scroll { max-height:230px; overflow:auto; }
-  button, input { font:inherit; border-radius:6px; border:1px solid var(--line); }
-  button { background:var(--line); color:var(--text); padding:6px 12px; cursor:pointer; }
-  button:hover { filter:brightness(1.25); }
-  button.primary { background:var(--accent); color:#04260d; border-color:transparent; font-weight:600; }
-  button.danger  { background:var(--bad); color:#2b0705; border-color:transparent; font-weight:600; }
-  button:disabled { opacity:.45; cursor:not-allowed; filter:none; }
-  input { background:var(--bg); color:var(--text); padding:6px 8px; font-family:var(--mono); }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .rec { color:var(--bad); font-weight:600; }
-  .muted { color:var(--dim); }
-  .pill { font-family:var(--mono); font-size:11px; padding:1px 7px; border-radius:20px;
-          border:1px solid var(--line); color:var(--dim); }
+  .kv .k { color:var(--dim); font-size:12.5px; }
+  .kv .v { font-family:var(--mono); font-size:12.5px; text-align:right; }
+  .v.ok { color:var(--ok); } .v.warn { color:var(--warn); } .v.bad { color:var(--bad); }
+
+  .row { display:flex; gap:7px; align-items:center; flex-wrap:wrap; }
+  button, input { font:inherit; border-radius:7px; border:1px solid var(--line); }
+  button { background:var(--panel2); color:var(--text); padding:6px 13px; cursor:pointer;
+           font-size:12.5px; font-weight:500; transition:filter .15s, opacity .15s; }
+  button:hover:not(:disabled) { filter:brightness(1.3); }
+  button.primary { background:var(--ok); color:#05230d; border-color:transparent; font-weight:650; }
+  button.danger  { background:var(--bad); color:#2a0705; border-color:transparent; font-weight:650; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  input { background:var(--bg); color:var(--text); padding:6px 9px;
+          font-family:var(--mono); font-size:12.5px; min-width:0; }
+  .hint { color:var(--faint); font-size:11.5px; margin-top:7px; min-height:1.2em;
+          word-break:break-all; }
+  .rec { color:var(--bad); font-weight:650; }
+  .blink { animation:pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity:.35; } }
+
+  #traffic .body { padding:0; }
+  .scroll { max-height:250px; overflow:auto; }
+  table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:11.5px; }
+  thead th { position:sticky; top:0; background:var(--panel); text-align:left;
+             color:var(--faint); font-weight:600; padding:6px 13px; font-size:10px;
+             text-transform:uppercase; letter-spacing:.07em;
+             border-bottom:1px solid var(--line); }
+  tbody td { padding:3.5px 13px; border-bottom:1px solid rgba(128,136,150,.1);
+             white-space:nowrap; }
+  tbody tr:hover { background:var(--panel2); }
+  td.id { color:var(--info); font-weight:600; }
+  .faint { color:var(--faint); }
+  .empty { color:var(--faint); text-align:center; padding:22px !important; }
 </style>
 </head>
 <body>
 
 <header>
-  <span id="live" class="dot"></span>
-  <h1>jetson-ros2-perception</h1>
-  <span class="sub">operator console</span>
-  <span style="flex:1"></span>
-  <span class="pill" id="host">—</span>
+  <span id="live" class="dot" title="green when frames are arriving"></span>
+  <span class="brand">jetson-ros2-perception <span>· operator console</span></span>
+  <div class="chips">
+    <span class="chip" id="c_power">power <b>—</b></span>
+    <span class="chip" id="c_cpu">cpu <b>—</b></span>
+    <span class="chip" id="c_gpu">gpu <b>—</b></span>
+    <span class="chip" id="c_temp">soc <b>—</b></span>
+    <span class="chip" id="c_disk">free <b>—</b></span>
+  </div>
 </header>
 
 <main>
-  <section class="card">
-    <h2>Camera · <span id="imgtopic" class="muted">/image_raw</span></h2>
-    <img id="video" alt="camera stream">
+  <section class="card" id="camera">
+    <h2>Camera <span class="tag" id="imgtopic">/image_raw</span></h2>
+    <div class="body">
+      <img id="video" alt="camera stream">
+      <div id="camfoot">
+        <button id="livebtn"
+          title="Pauses the MJPEG stream and shows a frozen frame. Frees CPU and network. Measured on this board: no significant effect on publisher rate — it holds ~60 Hz either way.">Stop live</button>
+        <button id="snapbtn">Snapshot</button>
+        <span class="hint" id="livehint" style="margin:0"></span>
+      </div>
+    </div>
   </section>
 
-  <section class="card">
+  <section class="card" id="pipeline">
     <h2>Pipeline</h2>
     <div class="body">
       <div class="kv"><span class="k">Resolution</span><span class="v" id="res">—</span></div>
       <div class="kv"><span class="k">Publisher rate</span><span class="v" id="hz">—</span></div>
-      <div class="kv"><span class="k">Console rx rate</span><span class="v" id="rxhz" title="This browser's stream rate. Lower than the publisher rate by design: the console is a Python subscriber and drops stale frames rather than queueing them.">—</span></div>
+      <div class="kv"><span class="k">Console rx rate</span><span class="v" id="rxhz"
+        title="Rate this console receives frames. Lower than the publisher rate is expected: it is a Python subscriber and drops stale frames rather than queueing them.">—</span></div>
       <div class="kv"><span class="k">Encoding</span><span class="v" id="enc">—</span></div>
       <div class="kv"><span class="k">Calibration</span><span class="v" id="calib">—</span></div>
       <div class="kv"><span class="k">Power mode</span><span class="v" id="power">—</span></div>
       <div class="kv"><span class="k">CPU</span><span class="v" id="cpu">—</span></div>
       <div class="kv"><span class="k">GPU</span><span class="v" id="gpu">—</span></div>
       <div class="kv"><span class="k">SoC temp</span><span class="v" id="temp">—</span></div>
-      <div class="kv"><span class="k">Disk free</span><span class="v" id="disk">—</span></div>
     </div>
   </section>
 
-  <section class="card">
+  <section class="card" id="capture">
     <h2>Data capture</h2>
     <div class="body">
       <div class="kv"><span class="k">Status</span><span class="v" id="recstate">idle</span></div>
       <div class="kv"><span class="k">Elapsed</span><span class="v" id="recelapsed">—</span></div>
       <div class="kv"><span class="k">Size</span><span class="v" id="recsize">—</span></div>
-      <div class="kv"><span class="k">Path</span><span class="v" id="recpath" style="font-size:11px">—</span></div>
-      <div class="row" style="margin-top:12px">
+      <div class="kv"><span class="k">Disk free</span><span class="v" id="disk">—</span></div>
+      <div class="row" style="margin-top:11px">
         <button id="recbtn" class="primary">Start recording</button>
-        <button id="snapbtn">Snapshot</button>
       </div>
-      <div id="capmsg" class="muted" style="margin-top:8px;font-size:12px"></div>
+      <div class="hint" id="capmsg"></div>
     </div>
   </section>
 
-  <section class="card">
-    <h2>CAN bus</h2>
+  <section class="card" id="canbus">
+    <h2>CAN bus <span class="tag" id="canif">—</span></h2>
     <div class="body">
-      <div class="kv"><span class="k">Interface</span><span class="v" id="canif">—</span></div>
       <div class="kv"><span class="k">State</span><span class="v" id="canstate">—</span></div>
       <div class="kv"><span class="k">Frames seen</span><span class="v" id="cancount">0</span></div>
-      <div class="row" style="margin-top:12px">
-        <input id="canid" size="5" value="123" title="CAN ID (hex)">
-        <input id="candata" size="16" value="DEADBEEF" title="payload (hex, max 8 bytes)">
+      <div class="row" style="margin-top:11px">
+        <input id="canid" size="4" value="123" title="CAN ID (hex)" placeholder="ID">
+        <input id="candata" style="flex:1" value="DEADBEEF" title="payload (hex, max 8 bytes)" placeholder="payload">
         <button id="cansend">Send</button>
       </div>
-      <div id="canmsg" class="muted" style="margin-top:8px;font-size:12px"></div>
+      <div class="hint" id="canmsg"></div>
     </div>
   </section>
 
-  <section class="card full">
+  <section class="card" id="traffic">
     <h2>CAN traffic</h2>
-    <div class="scroll">
-      <table>
-        <thead><tr><th>t (s)</th><th>ID</th><th>DLC</th><th>Data</th><th>Flags</th></tr></thead>
-        <tbody id="cantable"><tr><td colspan="5" class="muted">no frames yet</td></tr></tbody>
-      </table>
+    <div class="body">
+      <div class="scroll">
+        <table>
+          <thead><tr><th>t (s)</th><th>ID</th><th>DLC</th><th>Data</th><th>Flags</th></tr></thead>
+          <tbody id="cantable"><tr><td colspan="5" class="empty">no frames yet</td></tr></tbody>
+        </table>
+      </div>
     </div>
   </section>
 </main>
@@ -131,46 +192,66 @@
 const $ = id => document.getElementById(id);
 const fmt = (v, unit = '', dp = 1) =>
   (v === null || v === undefined) ? '—' : (typeof v === 'number' ? v.toFixed(dp) : v) + unit;
+const chip = (el, val) => { $(el).querySelector('b').textContent = val; };
 
-// The MJPEG stream is a plain <img>; the browser holds the multipart connection open.
-$('video').src = '/stream.mjpg';
+// The MJPEG stream is a plain <img>; the browser holds the multipart connection open
+// until the src changes. Pausing swaps in a single still from /frame.jpg, which closes
+// that connection and keeps the layout from collapsing to an empty box.
+let live = true;
+
+function setLive(on) {
+  live = on;
+  $('video').src = on ? '/stream.mjpg' : '/frame.jpg?t=' + Date.now();
+  $('livebtn').textContent  = on ? 'Stop live' : 'Go live';
+  $('livebtn').className    = on ? '' : 'primary';
+  $('livehint').textContent = on ? '' : 'paused — showing last frame';
+}
 
 let recording = false;
 
 async function poll() {
   try {
     const s = await (await fetch('/api/status')).json();
-    $('live').classList.toggle('on', s.image.connected);
-    $('imgtopic').textContent = s.image.topic;
-    $('res').textContent  = s.image.width ? `${s.image.width} × ${s.image.height}` : '—';
-    $('hz').textContent   = s.image.publisher_hz === null
-      ? 'no /publish_rate' : fmt(s.image.publisher_hz, ' Hz', 2);
-    $('hz').style.color   = s.image.publisher_hz === null ? 'var(--warn)' : '';
-    $('rxhz').textContent = fmt(s.image.console_rx_hz, ' Hz', 2);
-    $('enc').textContent  = s.image.encoding || '—';
-    $('calib').textContent = s.calibration.loaded ? 'loaded ✓' : 'none';
-    $('calib').style.color = s.calibration.loaded ? 'var(--accent)' : 'var(--warn)';
+    const i = s.image, h = s.host;
 
-    $('power').textContent = s.host.power || '—';
-    $('cpu').textContent   = fmt(s.host.cpu, ' %');
-    $('gpu').textContent   = fmt(s.host.gpu, ' %');
-    $('temp').textContent  = fmt(s.host.temp, ' °C');
-    $('disk').textContent  = fmt(s.host.disk_free_gb, ' GB');
-    $('host').textContent  = `${s.host.power || '?'} · ${fmt(s.host.temp, '°C')}`;
+    $('live').classList.toggle('on', i.connected);
+    $('imgtopic').textContent = i.topic;
+    $('res').textContent = i.width ? `${i.width} × ${i.height}` : '—';
+    $('enc').textContent = i.encoding || '—';
+
+    $('hz').textContent = i.publisher_hz === null ? 'no ~/publish_rate'
+                                                  : fmt(i.publisher_hz, ' Hz', 2);
+    $('hz').className = 'v' + (i.publisher_hz === null ? ' warn' : '');
+    $('rxhz').textContent = fmt(i.console_rx_hz, ' Hz', 2);
+
+    $('calib').textContent = s.calibration.loaded ? 'loaded' : 'none';
+    $('calib').className = 'v ' + (s.calibration.loaded ? 'ok' : 'warn');
+
+    $('power').textContent = h.power || '—';
+    $('cpu').textContent   = fmt(h.cpu, ' %');
+    $('gpu').textContent   = fmt(h.gpu, ' %');
+    $('temp').textContent  = fmt(h.temp, ' °C');
+    $('disk').textContent  = fmt(h.disk_free_gb, ' GB');
+    chip('c_power', h.power || '—');
+    chip('c_cpu',  fmt(h.cpu, '%'));
+    chip('c_gpu',  fmt(h.gpu, '%'));
+    chip('c_temp', fmt(h.temp, '°C'));
+    chip('c_disk', fmt(h.disk_free_gb, ' GB'));
 
     recording = s.recording.active;
-    $('recstate').innerHTML = recording ? '<span class="rec">● RECORDING</span>' : 'idle';
+    $('recstate').innerHTML = recording
+      ? '<span class="rec blink">● RECORDING</span>' : 'idle';
     $('recelapsed').textContent = recording ? fmt(s.recording.elapsed, ' s') : '—';
     $('recsize').textContent    = recording ? fmt(s.recording.size_mb, ' MB') : '—';
-    $('recpath').textContent    = s.recording.path || '—';
     $('recbtn').textContent     = recording ? 'Stop recording' : 'Start recording';
     $('recbtn').className       = recording ? 'danger' : 'primary';
+    if (recording && s.recording.path) $('capmsg').textContent = s.recording.path;
 
     $('canif').textContent    = s.can.interface;
     $('canstate').textContent = s.can.status;
-    $('cancount').textContent = s.can.count;
     const up = s.can.status.startsWith('listening');   // set by can_reader on successful bind
-    $('canstate').style.color = up ? 'var(--accent)' : 'var(--warn)';
+    $('canstate').className = 'v ' + (up ? 'ok' : 'warn');
+    $('cancount').textContent = s.can.count;
     $('cansend').disabled = !up;
   } catch (e) {
     $('live').classList.remove('on');
@@ -182,39 +263,38 @@ async function pollCan() {
     const frames = await (await fetch('/api/can')).json();
     const tb = $('cantable');
     if (!frames.length) {
-      tb.innerHTML = '<tr><td colspan="5" class="muted">no frames yet</td></tr>';
+      tb.innerHTML = '<tr><td colspan="5" class="empty">no frames yet</td></tr>';
       return;
     }
     tb.innerHTML = frames.map(f => {
-      const flags = [f.ext && 'EFF', f.rtr && 'RTR', f.err && 'ERR']
-        .filter(Boolean).join(' ') || '—';
-      const data = (f.data.match(/../g) || []).join(' ') || '—';
-      return `<tr><td class="muted">${f.t.toFixed(3)}</td><td>${f.id}</td>` +
-             `<td>${f.dlc}</td><td>${data}</td><td class="muted">${flags}</td></tr>`;
+      const flags = [f.ext && 'EFF', f.rtr && 'RTR', f.err && 'ERR'].filter(Boolean).join(' ') || '—';
+      const data  = (f.data.match(/../g) || []).join(' ') || '—';
+      return `<tr><td class="faint">${f.t.toFixed(3)}</td>` +
+             `<td class="id">${f.id}</td><td>${f.dlc}</td><td>${data}</td>` +
+             `<td class="faint">${flags}</td></tr>`;
     }).join('');
   } catch (e) { /* transient */ }
 }
 
 async function post(url, body) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {})
-  });
+  const r = await fetch(url, { method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(body || {}) });
   return r.json();
 }
+
+$('livebtn').onclick = () => setLive(!live);
 
 $('recbtn').onclick = async () => {
   $('recbtn').disabled = true;
   const r = await post(recording ? '/api/record/stop' : '/api/record/start');
-  $('capmsg').textContent = r.error ? 'error: ' + r.error : '';
+  if (r.error) $('capmsg').textContent = 'error: ' + r.error;
   $('recbtn').disabled = false;
   poll();
 };
 
 $('snapbtn').onclick = async () => {
   const r = await post('/api/snapshot');
-  $('capmsg').textContent = r.ok ? 'saved ' + r.path : 'error: ' + r.error;
+  $('livehint').textContent = r.ok ? 'saved ' + r.path.split('/').pop() : 'error: ' + r.error;
 };
 
 $('cansend').onclick = async () => {
@@ -223,6 +303,7 @@ $('cansend').onclick = async () => {
   pollCan();
 };
 
+setLive(true);
 poll(); pollCan();
 setInterval(poll, 1000);
 setInterval(pollCan, 500);

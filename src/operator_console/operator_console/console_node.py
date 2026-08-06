@@ -463,6 +463,8 @@ def make_handler(node):
                     return self._json(list(node.state.can_frames)[:80])
             if path == "/stream.mjpg":
                 return self._stream()
+            if path == "/frame.jpg":
+                return self._frame()
             if path.startswith("/static/"):
                 return self._static(os.path.basename(path))
             self.send_error(404)
@@ -508,6 +510,19 @@ def make_handler(node):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _frame(self):
+            """One JPEG. Used when the live stream is paused, so the panel shows a frozen
+            last frame instead of collapsing to an empty box."""
+            jpeg, _ = node.encode_stream_frame()
+            if jpeg is None:
+                return self.send_error(503, "no frame available")
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(jpeg)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(jpeg)
 
         def _stream(self):
             """multipart/x-mixed-replace MJPEG.
