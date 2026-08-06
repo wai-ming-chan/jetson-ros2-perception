@@ -16,7 +16,7 @@ ROS 2 perception and deployment stack, validated on NVIDIA Jetson hardware.
 | ROS | **Humble**, containerised (Ubuntu 20.04 has no native Humble) |
 | Industrial I/O | Isolated CAN FD (DB9), RS-232/422/485, 4x DI / 4x DO, 2x GbE |
 
-Two constraints from this hardware shape everything:
+Two constraints from this hardware currently:
 
 - The 2-lane CSI exposes **exactly two sensor modes** — `3840x2160@30` and `1920x1080@60`,
   both `RG10` raw Bayer. There is no 12 MP mode.
