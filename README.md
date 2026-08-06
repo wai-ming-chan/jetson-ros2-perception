@@ -32,11 +32,11 @@ bag-replay regression harness in CI.
 > robot — there is no drivetrain and no autonomous navigation. Every number below was
 > measured on the hardware described under *Hardware*, not in simulation.
 
-![Operator console demo](docs/media/operator-console.gif)
+![Operator console demo](docs/media/operator-console-detection.gif)
 
 *The operator console live: YOLOv8 detections overlaid on the camera feed at ~30 Hz, CAN
 frames injected and echoed on `can0`, host telemetry and rosbag recording — all served from
-the board. ([full-quality mp4](docs/media/operator-console.mp4))*
+the board. ([full-quality mp4](docs/media/operator-console-detection.mp4))*
 
 ## Hardware
 
