@@ -2,10 +2,9 @@
 
 ROS 2 perception and deployment stack, validated on NVIDIA Jetson hardware.
 
-> **Scope, stated honestly:** this is a perception and deployment stack running on real
-> Jetson hardware. It is not a mobile robot — there is no chassis, no drivetrain, and no
-> autonomous navigation. Every number below was measured on the device described in
-> *Hardware*, not in simulation and not on a workstation.
+> **Scope:** this is a deployment stack running on real Jetson hardware.
+> Yet, it is not deployed on a mobile robot, there is no drivetrain and no autonomous navigation.
+> Every number below was measured on the device described in real *Hardware*, not in simulation.
 
 ## Hardware
 
