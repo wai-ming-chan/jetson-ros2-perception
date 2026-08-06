@@ -30,6 +30,7 @@ import cv2
 import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image
@@ -43,6 +44,16 @@ CAN_RTR_FLAG = 0x40000000
 CAN_ERR_FLAG = 0x20000000
 CAN_SFF_MASK = 0x000007FF
 CAN_EFF_MASK = 0x1FFFFFFF
+
+
+def deque_hz(dq, lock):
+    """Rate implied by a deque of monotonic timestamps."""
+    with lock:
+        t = list(dq)
+    if len(t) < 2:
+        return 0.0
+    span = t[-1] - t[0]
+    return (len(t) - 1) / span if span > 0 else 0.0
 
 
 class State:
@@ -60,6 +71,7 @@ class State:
         self.publisher_hz = None       # authoritative, reported BY the camera node
         self.calibrated = False
         self.calib_name = ""
+        self.stream_times = collections.deque(maxlen=60)
         self.can_frames = collections.deque(maxlen=can_history)
         self.can_status = "not started"
         self.can_count = 0
@@ -68,6 +80,9 @@ class State:
         self.record_started = 0.0
 
     def image_hz(self):
+        return deque_hz(self.frame_times, self.lock)
+
+    def _unused_image_hz(self):
         with self.lock:
             t = list(self.frame_times)
         if len(t) < 2:
@@ -249,6 +264,18 @@ class OperatorConsole(Node):
         self.can_interface = self.declare_parameter("can_interface", "can0").value
         self.stream_width = self.declare_parameter("stream_width", 960).value
         self.stream_quality = self.declare_parameter("stream_jpeg_quality", 75).value
+        # A CAP, not a target. Measured on this board (1080p source, MJPEG to one
+        # client), delivered rate and total host CPU:
+        #     width 640  -> ~55-60 fps, 58% cpu   (hits the cap)
+        #     width 960  -> ~36 fps,    48% cpu   (default: good detail/smoothness balance)
+        # The publisher holds 60 Hz throughout, so streaming costs CPU but not throughput.
+        # This was 15 fps hardcoded, which was the sole cause of visible lag.
+        # dynamic_typing so both `stream_fps:=60` and `stream_fps:=60.0` work.
+        # Declared strictly, an int override against a float default raises
+        # InvalidParameterTypeException and the node dies at startup.
+        self.stream_fps = float(self.declare_parameter(
+            "stream_fps", 60.0,
+            ParameterDescriptor(dynamic_typing=True)).value)
         self.capture_dir = self.declare_parameter("capture_dir", "/captures").value
         self.record_topics = self.declare_parameter(
             "record_topics", ["/image_raw", "/camera_info"]).value
@@ -367,16 +394,25 @@ class OperatorConsole(Node):
         return path, None
 
     def encode_stream_frame(self):
+        """Return (jpeg_bytes, frame_seq) for the newest frame.
+
+        Resizes inside the lock rather than copying the full-resolution frame and resizing
+        afterwards. The copy existed only to release the lock sooner, but resize already
+        writes to a fresh buffer, so it was ~1.1 ms of pure memcpy per streamed frame for
+        no benefit.
+        """
         with self.state.lock:
-            frame = None if self.state.frame is None else self.state.frame
+            frame = self.state.frame
             seq = self.state.frame_seq
-            if frame is not None:
+            if frame is None:
+                return None, seq
+            if self.stream_width and frame.shape[1] > self.stream_width:
+                scale = self.stream_width / float(frame.shape[1])
+                frame = cv2.resize(frame, None, fx=scale, fy=scale,
+                                   interpolation=cv2.INTER_AREA)
+            else:
                 frame = frame.copy()
-        if frame is None:
-            return None, seq
-        if self.stream_width and frame.shape[1] > self.stream_width:
-            scale = self.stream_width / float(frame.shape[1])
-            frame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
         ok, buf = cv2.imencode(".jpg", frame,
                                [int(cv2.IMWRITE_JPEG_QUALITY), int(self.stream_quality)])
         return (buf.tobytes() if ok else None), seq
@@ -408,6 +444,7 @@ class OperatorConsole(Node):
                 },
             }
         payload["image"]["console_rx_hz"] = round(st.image_hz(), 2)
+        payload["image"]["stream_hz"] = round(deque_hz(st.stream_times, st.lock), 2)
         payload["host"] = {
             "cpu": cpu_percent(), "gpu": gpu_percent(),
             "power": power_mode(), "temp": soc_temp_c(),
@@ -527,9 +564,8 @@ def make_handler(node):
         def _stream(self):
             """multipart/x-mixed-replace MJPEG.
 
-            Capped at ~15 fps: this is a monitoring view, and JPEG-encoding 60 fps of
-            1080p in Python would burn CPU the pipeline needs. Only sends when the frame
-            counter has advanced, so a stalled camera does not spin.
+            Rate-limited by the stream_fps parameter (default 30). Only sends when the
+            frame counter has advanced, so a stalled camera does not spin.
             """
             self.send_response(200)
             self.send_header("Age", "0")
@@ -538,19 +574,34 @@ def make_handler(node):
             self.send_header("Content-Type",
                              "multipart/x-mixed-replace; boundary=FRAME")
             self.end_headers()
-            last_seq, interval = -1, 1.0 / 15.0
+            last_seq = -1
+            min_interval = 1.0 / max(1.0, float(node.stream_fps))
+            next_send = 0.0
             try:
                 while True:
+                    now = time.monotonic()
+                    if now < next_send:
+                        # Poll finely rather than sleeping a whole frame interval, so a
+                        # fresh frame goes out as soon as it is allowed to. A fixed sleep
+                        # here added up to a full interval of latency on every frame.
+                        time.sleep(min(0.002, next_send - now))
+                        continue
+
                     jpeg, seq = node.encode_stream_frame()
-                    if jpeg is not None and seq != last_seq:
-                        last_seq = seq
-                        self.wfile.write(b"--FRAME\r\n")
-                        self.send_header("Content-Type", "image/jpeg")
-                        self.send_header("Content-Length", str(len(jpeg)))
-                        self.end_headers()
-                        self.wfile.write(jpeg)
-                        self.wfile.write(b"\r\n")
-                    time.sleep(interval)
+                    if jpeg is None or seq == last_seq:
+                        time.sleep(0.002)
+                        continue
+
+                    last_seq = seq
+                    next_send = now + min_interval
+                    with node.state.lock:
+                        node.state.stream_times.append(now)
+                    self.wfile.write(b"--FRAME\r\n")
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(jpeg)))
+                    self.end_headers()
+                    self.wfile.write(jpeg)
+                    self.wfile.write(b"\r\n")
             except (BrokenPipeError, ConnectionResetError):
                 pass                  # browser navigated away; normal
 

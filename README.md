@@ -96,6 +96,19 @@ Two details worth calling out:
 - **No new dependencies.** `rclpy`, `cv2` and the Python standard library only. The
   container has no flask/fastapi and no ROS web packages, and with no Humble binaries for
   Ubuntu 20.04 every addition would have meant a source build.
+- **Stream rate is a tunable cap, not an encoder limit.** Per-frame cost at 960x540 is
+  ~1.0 ms resize + ~6.4 ms JPEG, so ~117 fps is theoretically available; the rest goes to
+  Python overhead and contention. Measured delivery to one client, with the publisher
+  holding 60 Hz throughout:
+
+  | `stream_width` | delivered | host CPU |
+  |---|---|---|
+  | 640 | ~55–60 fps | 58% |
+  | 960 (default) | ~36 fps | 48% |
+
+  Streaming costs CPU but does **not** reduce publisher throughput — measured 59.99 Hz with
+  the stream off and 60.00 Hz with a client attached. Use *Stop live* to shed the cost when
+  the view isn't needed.
 
 ## Packages
 

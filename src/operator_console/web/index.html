@@ -136,6 +136,8 @@
     <div class="body">
       <div class="kv"><span class="k">Resolution</span><span class="v" id="res">—</span></div>
       <div class="kv"><span class="k">Publisher rate</span><span class="v" id="hz">—</span></div>
+      <div class="kv"><span class="k">Stream to browser</span><span class="v" id="streamhz"
+        title="Frames per second actually pushed to this browser. Capped by the stream_fps parameter (default 30), not by encoder speed: measured cost is ~7.4 ms/frame, so ~117 fps is achievable.">—</span></div>
       <div class="kv"><span class="k">Console rx rate</span><span class="v" id="rxhz"
         title="Rate this console receives frames. Lower than the publisher rate is expected: it is a Python subscriber and drops stale frames rather than queueing them.">—</span></div>
       <div class="kv"><span class="k">Encoding</span><span class="v" id="enc">—</span></div>
@@ -223,6 +225,7 @@ async function poll() {
                                                   : fmt(i.publisher_hz, ' Hz', 2);
     $('hz').className = 'v' + (i.publisher_hz === null ? ' warn' : '');
     $('rxhz').textContent = fmt(i.console_rx_hz, ' Hz', 2);
+    $('streamhz').textContent = live ? fmt(i.stream_hz, ' Hz', 1) : 'paused';
 
     $('calib').textContent = s.calibration.loaded ? 'loaded' : 'none';
     $('calib').className = 'v ' + (s.calibration.loaded ? 'ok' : 'warn');
