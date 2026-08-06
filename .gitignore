@@ -1,0 +1,43 @@
+# colcon
+build/
+install/
+log/
+
+# Captures and recordings (too large for git)
+captures/
+*.raw
+*.bmp
+*.tiff
+*.mp4
+rosbag2_*/
+output/
+
+# Keep small sample images
+!samples/*.jpg
+!samples/*.png
+
+# TensorRT engines are host- and version-specific; rebuild them, never commit them
+*.engine
+*.plan
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Compiled CUDA / objects
+*.o
+*.so
+*.cubin
+*.ptx
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Credentials
+*.env
+.env.*

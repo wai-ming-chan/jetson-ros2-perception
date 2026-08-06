@@ -1,0 +1,29 @@
+/**:
+  ros__parameters:
+    sensor_id: 0
+
+    # Verified modes only -- the 2-lane CSI on this carrier exposes exactly two.
+    # Anything else fails to negotiate. See PROGRESS.md.
+    #   3840 x 2160 @ 30
+    #   1920 x 1080 @ 60
+    width: 1920
+    height: 1080
+    framerate: 60
+
+    # nvvidconv flip-method: 0=none 1=ccw90 2=180 3=cw90 4=horiz 5,6=diag 7=vert
+    flip_method: 0
+
+    frame_id: camera_optical_frame
+
+    # Argus AE needs time to converge; the first frames are black or full-scale noise.
+    warmup_frames: 30
+
+    # Leave empty for auto exposure/gain. Populate only for diagnostics or fixed-exposure
+    # capture. Units: exposure in nanoseconds, as "min max".
+    # A 33 ms exposure cannot be sustained at 60 fps -- drop framerate to 30 first.
+    exposure_time_range: ""
+    gain_range: ""
+
+    # Set once intrinsics are calibrated, e.g.
+    # camera_info_url: "file:///workspace/src/jetson_camera/config/imx477_1080p.yaml"
+    camera_info_url: ""
