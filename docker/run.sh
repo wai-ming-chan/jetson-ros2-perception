@@ -12,6 +12,12 @@
 # default runtime. Add it back if that ever changes.
 set -euo pipefail
 
+# Teardown rule for any container started from this script:
+#     docker stop -t 30 <name>      # SIGTERM -> clean ROS shutdown -> Argus released
+# never `docker rm -f` / `kill -9`. A SIGKILLed Argus client leaves a session dangling
+# inside nvargus-daemon; the damage accumulates until the camera stops starting at all
+# and only `sudo systemctl restart nvargus-daemon` recovers it.
+
 # Preflight. Without this, a user whose shell lacks the docker group gets
 # "docker: unknown server OS: ." -- Docker's way of saying its daemon query returned
 # nothing, which is what a permission failure looks like at this stage. The real cause is

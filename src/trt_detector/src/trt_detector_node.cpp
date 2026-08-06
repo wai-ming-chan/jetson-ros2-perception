@@ -93,6 +93,10 @@ public:
     score_threshold_ = declare_parameter<double>("score_threshold", 0.35);
     nms_iou_ = declare_parameter<double>("nms_iou_threshold", 0.45);
     overlay_quality_ = declare_parameter<int>("overlay_jpeg_quality", 70);
+    // The overlay is a debug view, not a data product. Encoding it at full 1080p was
+    // measured at 33.4 ms per frame -- more than inference -- and dropped the detector
+    // from 29 Hz to 17.7 Hz. Downscaling first costs ~1 ms and restores the rate.
+    overlay_width_ = declare_parameter<int>("overlay_width", 960);
     report_interval_s_ = declare_parameter<double>("rate_report_interval", 5.0);
 
     load_engine();
@@ -343,9 +347,18 @@ private:
     if (overlay_pub_->get_subscription_count() == 0) {
       return;
     }
-    image.copyTo(overlay_);
+    // Downscale BEFORE drawing: fewer pixels to annotate and, far more importantly,
+    // fewer to JPEG-encode. Boxes are scaled to match.
+    float s = 1.0f;
+    if (overlay_width_ > 0 && image.cols > overlay_width_) {
+      s = static_cast<float>(overlay_width_) / image.cols;
+      cv::resize(image, overlay_, {}, s, s, cv::INTER_AREA);
+    } else {
+      image.copyTo(overlay_);
+    }
     for (const auto & d : dets) {
-      const cv::Rect r(d.box);
+      const cv::Rect r(
+        cv::Rect2f(d.box.x * s, d.box.y * s, d.box.width * s, d.box.height * s));
       cv::rectangle(overlay_, r, {80, 220, 60}, 2);
       char label[64];
       std::snprintf(
@@ -417,6 +430,7 @@ private:
   double score_threshold_{0.35};
   double nms_iou_{0.45};
   int overlay_quality_{70};
+  int overlay_width_{960};
   double report_interval_s_{5.0};
 
   // TensorRT

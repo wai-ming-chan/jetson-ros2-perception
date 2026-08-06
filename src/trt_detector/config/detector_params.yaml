@@ -8,6 +8,9 @@
     image_topic: "/image_raw"
     score_threshold: 0.35
     nms_iou_threshold: 0.45
-    # Overlay is only encoded while ~/overlay/compressed has subscribers.
+    # Overlay is only encoded while ~/overlay/compressed has subscribers, and is
+    # downscaled first: encoding at full 1080p measured 33.4 ms/frame and cost more
+    # than inference itself. 0 disables downscaling.
     overlay_jpeg_quality: 70
+    overlay_width: 960
     rate_report_interval: 5.0

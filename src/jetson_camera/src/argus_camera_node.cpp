@@ -53,6 +53,11 @@ public:
     warmup_frames_ = declare_parameter<int>("warmup_frames", 30);
     // Seconds without a frame before the pipeline is torn down and rebuilt.
     stall_restart_s_ = declare_parameter<int>("stall_restart_sec", 5);
+    // How many consecutive rebuilds may fail to produce a frame before giving up.
+    // Sized to outlive an nvargus-daemon restart: the daemon segfaults on CSI capture
+    // timeouts (observed: fusaViHandler timeout -> SIGSEGV -> systemd restart, ~8 s
+    // unavailable). With backoff below, 10 attempts tolerates roughly a minute.
+    max_rebuilds_ = declare_parameter<int>("max_rebuilds", 10);
     report_interval_s_ = declare_parameter<double>("rate_report_interval", 5.0);
     // 0 = use all available cores; 1 = GStreamer's single-threaded default.
     convert_threads_ = declare_parameter<int>("convert_threads", 0);
@@ -193,11 +198,22 @@ private:
           get_logger(), "no frame for %d s; assuming wedged pipeline, rebuilding",
           stalled_seconds);
       }
+      if (rebuilds_without_frame == 2) {
+        // Two failed rebuilds usually means the daemon, not us. Say so once, with the
+        // check that actually diagnoses it.
+        RCLCPP_ERROR(
+          get_logger(),
+          "repeated capture failures -- check nvargus-daemon on the HOST: "
+          "`systemctl status nvargus-daemon` (it segfaults on CSI timeouts and is "
+          "restarted by systemd; this node retries for ~1 min to ride that out)");
+      }
 
       // A rebuild "succeeding" only means PLAYING was accepted -- with Argus held by
       // another process that happens and still no frame ever arrives. Cap consecutive
       // rebuilds that yield nothing, or this would cycle forever.
-      if (rebuilds_without_frame >= 3 || !rebuild_pipeline()) {
+      if (rebuilds_without_frame >= max_rebuilds_ ||
+        !rebuild_pipeline(rebuilds_without_frame))
+      {
         break;
       }
       ++rebuilds_without_frame;
@@ -218,21 +234,29 @@ private:
     }
   }
 
-  bool rebuild_pipeline()
+  bool rebuild_pipeline(int consecutive_failures)
   {
-    for (int attempt = 1; attempt <= 3 && running_ && rclcpp::ok(); ++attempt) {
-      teardown_pipeline();
-      std::this_thread::sleep_for(std::chrono::seconds(2));
-      try {
-        start_pipeline();
-        RCLCPP_INFO(get_logger(), "pipeline restarted (attempt %d)", attempt);
-        return true;
-      } catch (const std::exception & e) {
-        RCLCPP_ERROR(
-          get_logger(), "pipeline restart attempt %d failed: %s", attempt, e.what());
-      }
+    // Backoff: 2, 4, 6 ... capped at 10 s. A fixed short retry is actively harmful --
+    // nvargus-daemon reclaims a dead client's session slower than a tight loop retries,
+    // so impatient rebuilds pile up half-created sessions and deepen the outage.
+    const int delay = std::min(2 + 2 * consecutive_failures, 10);
+    teardown_pipeline();
+    for (int slept = 0; slept < delay && running_ && rclcpp::ok(); ++slept) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
     }
-    return false;
+    if (!running_ || !rclcpp::ok()) {
+      return false;
+    }
+    try {
+      start_pipeline();
+      RCLCPP_INFO(
+        get_logger(), "pipeline rebuilt (attempt %d/%d after %d s)",
+        consecutive_failures + 1, max_rebuilds_, delay);
+      return true;
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(get_logger(), "pipeline rebuild failed: %s", e.what());
+      return false;
+    }
   }
 
   void teardown_pipeline()
@@ -356,6 +380,7 @@ private:
   int flip_method_{0};
   int warmup_frames_{30};
   int stall_restart_s_{5};
+  int max_rebuilds_{10};
   double report_interval_s_{5.0};
   int convert_threads_{0};
   int64_t frames_since_report_{0};

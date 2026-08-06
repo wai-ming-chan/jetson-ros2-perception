@@ -1,0 +1,15 @@
+[Unit]
+Description=Bring up CAN0 (SocketCAN, 500 kbit/s) on the Industrial carrier
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# mttcan is the Tegra CAN driver; it ships in the kernel but is not autoloaded.
+ExecStart=/sbin/modprobe mttcan
+ExecStart=/sbin/ip link set can0 type can bitrate 500000
+ExecStart=/sbin/ip link set up can0
+ExecStop=/sbin/ip link set down can0
+
+[Install]
+WantedBy=multi-user.target

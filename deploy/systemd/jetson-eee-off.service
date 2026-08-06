@@ -1,0 +1,20 @@
+[Unit]
+# Energy-Efficient Ethernet (802.3az) puts the PHY into low-power idle between packets.
+# On this Mac<->Tegra link, waking costs ~1 s -- measured: single frame fetches stalled
+# 1.007 s from idle, then ran at 40 MB/s once warm. Any idle-gapped traffic pays that
+# penalty on every gap: the operator console dropped to 1 Hz over Ethernet while Wi-Fi
+# managed 15. Bulk transfers never idle, which is why throughput tests looked perfect.
+Description=Disable Energy-Efficient Ethernet on eth0 (adds ~1s wake latency)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# ethtool prints "eee unmodified, ignoring" even when it applies the change; verify with
+# `ethtool --show-eee eth0`, not the exit output. `|| true` because a NIC without EEE
+# support must not fail the boot.
+ExecStart=/bin/sh -c '/sbin/ethtool --set-eee eth0 eee off || true'
+
+[Install]
+WantedBy=multi-user.target
