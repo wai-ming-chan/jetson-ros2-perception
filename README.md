@@ -7,20 +7,23 @@ validated end to end on an NVIDIA Jetson.
 
 Concretely:
 
-- **A camera as a robust ROS 2 driver** — IMX477 through the Jetson's hardware ISP to
-  `sensor_msgs/Image` at a sustained 1920×1080 @ 60 Hz, with watchdogs that rebuild the
-  capture pipeline on failure and exit visibly when recovery is impossible, so a
-  supervisor can act instead of a robot going silently blind.
-- **An operator console in the browser** — live camera, pipeline and host telemetry, CAN
-  frame injection and traffic view, and rosbag recording, all from one page served by the
-  headless board itself (demo below).
-- **Industrial I/O** — the carrier's isolated CAN FD port brought up under SocketCAN and
-  exercised end to end.
-- **Reproducible deployment** — everything runs from a Docker image pinned to the board's
-  JetPack release; a fresh device reaches "camera streaming" in a handful of commands.
-- **Measurement as a habit** — every rate and cost quoted here was measured on the board,
-  publisher-side, and the measurement traps found along the way are documented rather
-  than papered over.
+- **Camera driver (`jetson_camera`)** — C++ ROS 2 node for the IMX477 over the Jetson
+  hardware ISP (Argus/GStreamer). Publishes `sensor_msgs/Image` and `CameraInfo` at a
+  sustained 1920×1080 @ 60 Hz, with capture-stall detection, automatic pipeline
+  recovery, and fail-fast shutdown for supervised restart (launch respawn / systemd).
+- **Operator console (`operator_console`)** — browser-based operations UI served from the
+  board: live video, node and host telemetry (publish rate, CPU/GPU load, power mode,
+  SoC temperature), CAN frame TX/RX, and rosbag2 record control. Python standard library
+  only; runs fully headless (demo below).
+- **CAN bus bring-up** — SocketCAN on the carrier's isolated CAN FD interface (`mttcan`,
+  500 kbit/s), validated in loopback and integrated into the console for frame injection
+  and traffic monitoring.
+- **Containerized deployment** — ROS 2 Humble in Docker, pinned to the board's L4T
+  release; a stock JetPack 5.1.3 device reaches camera streaming with a single build and
+  launch sequence.
+- **On-target benchmarking** — publisher-side instrumentation of frame rate and compute
+  load across sensor modes and power profiles; results and methodology in the benchmark
+  table below.
 
 *Next:* TensorRT detection, CUDA preprocessing, a `can_msgs` bridge node, and a
 bag-replay regression harness in CI.
