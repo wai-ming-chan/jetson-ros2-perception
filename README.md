@@ -47,7 +47,7 @@ the board. ([full-quality mp4](docs/media/operator-console-detection.mp4))*
 | ROS | **Humble**, containerised (Ubuntu 20.04 has no native Humble) |
 | Industrial I/O | Isolated CAN FD (DB9), RS-232/422/485, 4x DI / 4x DO, 2x GbE |
 
-Two constraints from this hardware currently:
+Two hardware constraints shape everything below:
 
 - The 2-lane CSI exposes **exactly two sensor modes** — `3840x2160@30` and `1920x1080@60`,
   both `RG10` raw Bayer. There is no 12 MP mode.
@@ -66,25 +66,39 @@ from real incidents; `PROGRESS.md` holds the underlying evidence.
 ROS 2 Humble requires Python 3.10 and has no official Ubuntu 20.04 binaries. JetPack 5.1.3
 is Ubuntu 20.04. Containers are therefore not a convenience here — they are the only way
 to run Humble on this image without reflashing, which would put the working camera driver
-at risk. See `docs/platform-decision.md`.
+at risk — JetPack 6.2 is where this camera is documented to break on Seeed carriers.
 
 ## Quick start
 
 ```bash
+# host settings the stack depends on (DDS socket buffers, EEE, CAN) -- once per device
+sudo deploy/install.sh
+
 docker build -t jetson-ros2-perception:latest -f docker/Dockerfile .
 ./docker/run.sh
 
 # inside the container
 colcon build --symlink-install
 source install/setup.bash
-ros2 launch jetson_camera camera.launch.py
+ros2 launch jetson_bringup bringup.launch.py     # camera + detector + console
 ```
 
-From another shell, confirm frames are flowing:
+Then open `http://<jetson-ip>:8080`. Variants: `detector:=false` for the plain camera,
+`console:=false` for headless.
+
+`deploy/install.sh` is not optional tuning — without the socket buffer settings, raw image
+subscribers receive **nothing at all**. See [`docs/runbook.md`](docs/runbook.md).
+
+The detector needs an engine built on the device (they are hardware- and TensorRT-version
+specific, so they are never committed):
 
 ```bash
-ros2 topic hz /image_raw
+/usr/src/tensorrt/bin/trtexec --onnx=/models/yolov8n.onnx --fp16 \
+    --saveEngine=/models/yolov8n_fp16.engine
 ```
+
+**Stop with `docker stop -t 30`, never `docker rm -f`** — a SIGKILLed Argus client leaves a
+session dangling in `nvargus-daemon` and the camera eventually stops starting.
 
 ## Operator console
 
@@ -92,12 +106,13 @@ A browser-based control surface for the stack — camera, pipeline telemetry, CA
 and the controls to actually operate it.
 
 ```bash
+# usually started by the bringup launch above; standalone:
 ros2 launch operator_console console.launch.py     # then open http://<jetson>:8080
 ```
 
 | Shows | Controls |
 |---|---|
-| Live MJPEG from `/image_raw` | Start/stop `rosbag2` recording, with live size and elapsed |
+| Live video from `/image_raw/compressed`, or the detector's overlay | Start/stop `rosbag2` recording, with live size and elapsed |
 | Publisher rate, resolution, encoding | Snapshot the current frame to disk |
 | Calibration loaded / not | Inject a CAN frame (id + payload) |
 | Power mode, CPU, GPU, SoC temp, disk free | |
@@ -107,7 +122,7 @@ This is **not** a Foxglove or `rqt` replacement — those visualise topics and d
 The console exists for the part they don't do: triggering recordings, capturing stills and
 putting frames on the bus, from one page, on a headless board.
 
-Two details worth calling out:
+Four details worth calling out:
 
 - It reports the **publisher's** frame rate, which the camera node measures and publishes on
   `~/publish_rate` — not the rate the console itself receives. Timing your own arrivals
@@ -148,16 +163,28 @@ The measurement is in `PROGRESS.md`.
 
 ## Benchmarks
 
-Measured on the hardware above. *(To be filled as pipeline variants land.)*
+All figures measured on the hardware above at 15W, publisher-side. 7W rows pending.
 
-| Pipeline | Capture path | Resolution | Power | FPS | CPU |
-|---|---|---|---|---|---|
-| `/image_raw` (bgr8) | Argus (HW ISP) | 1920x1080@60 | 15W | **60.0** | 0.65 core, GPU idle |
-| `/image_raw` (bgr8) | Argus (HW ISP) | 3840x2160@30 | 15W | **29.9** | 1.0 core, GPU idle |
-| ↳ same, `videoconvert n-threads=1` | Argus (HW ISP) | 3840x2160@30 | 15W | 26.9 | one core pinned at 74% |
-| `/image_raw` (bgr8) | Argus (HW ISP) | 1920x1080@60 | 7W | — | — |
-| + TensorRT FP16 detection (`trt_detector`) | Argus | 1920x1080 | 15W | **29–30** (every frame) | 20.2 ms e2e: pre 4.0 + infer 12.1 + post 4.0; GPU 50% |
-| Camera publisher with a raw subscriber attached | Argus | 1920x1080@60 | 15W | 29.3 | DDS serialisation of 6.2 MB frames is the cost |
+**Camera** (`jetson_camera`, no subscribers unless stated):
+
+| Configuration | Rate | Notes |
+|---|---|---|
+| 1920×1080@60 | **60.0 Hz** | 0.65 core, GPU idle |
+| 3840×2160@30 | **29.9 Hz** | 1.0 core; full sensor rate |
+| ↳ same, `videoconvert n-threads=1` | 26.9 Hz | 11% short — one core pinned at 74% while five idled. The default is single-threaded; `n-threads=0` recovers full rate. |
+| 1920×1080@60, detector subscribed | **60.0 Hz** | Unaffected. Before the DDS socket-buffer fix this collapsed to 29.3 Hz — the kernel's 208 KB default cannot carry 6.2 MB frames. |
+
+**Detection** (`trt_detector`, YOLOv8n FP16, camera at 1080p60, console displaying the overlay):
+
+| Metric | Value |
+|---|---|
+| Detection rate | **38 Hz** |
+| End-to-end latency | **24.7 ms** — preprocess 3.9 + inference 10.1 + decode/NMS 4.0 + overlay 6.7 |
+| Load | CPU ~90% (all six cores, whole stack), GPU 59% |
+
+The overlay is encoded only while something subscribes, and downscaled to 960 px first:
+at full 1080p that single step cost 33.4 ms — more than inference — and halved the
+detector to 17.7 Hz.
 
 **Model inference** (YOLOv8n, `trtexec`, batch 1, 640×640, TensorRT 8.5.2, 15W —
 engines built on-device):
@@ -170,6 +197,15 @@ engines built on-device):
 Rates are measured **publisher-side**, by the node counting its own frames. `ros2 topic hz`
 under-reports badly here — it is a Python subscriber deserialising ~6.2 MB per frame, so it
 measures its own throughput, not the pipeline's. It read 47.8 Hz against an actual 60.0 Hz.
+
+## Repository layout
+
+```
+docker/       Dockerfile, run.sh (the verified container flags), cyclonedds.xml
+deploy/       host settings as systemd units + sysctl (install.sh)
+docs/         runbook.md, demo media
+src/          jetson_camera, trt_detector, operator_console, jetson_bringup
+```
 
 ## License
 
