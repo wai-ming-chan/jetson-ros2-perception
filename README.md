@@ -21,6 +21,11 @@ into CI as a regression test.
 > robot — there is no drivetrain and no autonomous navigation. Every number below was
 > measured on the hardware described under *Hardware*, not in simulation.
 
+![Operator console demo](docs/media/operator-console.gif)
+
+*The operator console live: camera at 60 Hz, CAN frames injected and echoed on `can0`,
+rosbag recording toggled from the browser. ([full-quality mp4](docs/media/operator-console.mp4))*
+
 ## Hardware
 
 | | |
@@ -71,8 +76,6 @@ and the controls to actually operate it.
 ```bash
 ros2 launch operator_console console.launch.py     # then open http://<jetson>:8080
 ```
-
-<!-- TODO: screenshot / GIF -->
 
 | Shows | Controls |
 |---|---|

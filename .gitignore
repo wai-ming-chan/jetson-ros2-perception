@@ -9,6 +9,9 @@ captures/
 *.bmp
 *.tiff
 *.mp4
+# ...except the README demo media
+!docs/media/*.mp4
+!docs/media/*.gif
 rosbag2_*/
 output/
 
