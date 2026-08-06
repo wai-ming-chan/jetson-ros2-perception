@@ -35,3 +35,11 @@
     # NOTE the _1080p suffix: intrinsics are resolution-specific. Switching width/height
     # means switching this file too, or the geometry is silently wrong.
     camera_info_url: "file:///workspace/src/jetson_camera/config/imx477_1080p.yaml"
+
+    # JPEG quality for the /image_raw/compressed stream (the operator console's feed).
+    # This build of compressed_image_transport reads the value ONLY when the publisher is
+    # created -- `ros2 param set` at runtime reports success but changes nothing (verified:
+    # frame size 1257 KB before, 1258 KB after). It must be set here, before startup.
+    # At the default (80), 1080p frames are ~1.3 MB; encoding them costs the capture loop
+    # ~28 Hz of its 60 while a viewer is subscribed, and moving them limits the browser.
+    image_raw.jpeg_quality: 60
