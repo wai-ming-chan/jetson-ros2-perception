@@ -25,8 +25,7 @@ Concretely:
   load across sensor modes and power profiles; results and methodology in the benchmark
   table below.
 
-*Next:* TensorRT detection, CUDA preprocessing, a `can_msgs` bridge node, and a
-bag-replay regression harness in CI.
+*Next:* a SocketCAN ↔ ROS 2 bridge node, and a bag-replay regression harness in CI.
 
 > **Scope:** this stack runs on real Jetson hardware, but it is not deployed on a mobile
 > robot — there is no drivetrain and no autonomous navigation. Every number below was
@@ -135,13 +134,17 @@ Two details worth calling out:
 
 | Package | Purpose |
 |---|---|
-| `jetson_camera` | Argus (hardware ISP) → `sensor_msgs/Image` + `CameraInfo` |
-
+| `jetson_camera` | Argus (hardware ISP) → `sensor_msgs/Image` + `CameraInfo`, with capture-stall detection and supervised recovery |
 | `trt_detector` | YOLOv8 via TensorRT → `Detection2DArray` + compressed overlay, per-stage latency instrumentation |
+| `operator_console` | Browser operations UI: live video, telemetry, CAN TX/RX, rosbag2 control |
+| `jetson_bringup` | One launch file for the whole stack |
 
-Planned: `can_bridge` (SocketCAN ↔ `can_msgs`), `bag_tools` (recorder + replay harness).
-CUDA preprocessing was planned and measured out: at 4.0 ms on CPU against a 33 ms frame
-budget, a kernel would not pay for itself.
+Planned: `can_bridge` (SocketCAN ↔ ROS 2 messages — CAN currently runs through the console
+only), `bag_tools` (recorder + replay regression harness).
+
+**Cancelled:** CUDA preprocessing. It was planned, then measured out — preprocessing costs
+4.0 ms on the CPU against a 33 ms frame budget, so a GPU kernel could not pay for itself.
+The measurement is in `PROGRESS.md`.
 
 ## Benchmarks
 
