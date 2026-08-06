@@ -283,14 +283,14 @@ class OperatorConsole(Node):
         self.rate_topic = self.declare_parameter(
             "rate_topic", "/argus_camera/publish_rate").value
 
-        self.max_streams = int(self.declare_parameter("max_streams", 2).value)
+        self.max_streams = int(self.declare_parameter("max_streams", 8).value)
         # Seconds a client may go without accepting data before we hang up. A
         # browser that navigates away can leave a socket whose buffer stays full:
         # select() then reports "not writable" forever, and because the loop never
         # attempts a write it never sees BrokenPipeError either, so without this it
         # spins for the life of the process holding a stream slot.
         self.stream_stall_timeout = float(self.declare_parameter(
-            "stream_stall_timeout", 5.0,
+            "stream_stall_timeout", 10.0,
             ParameterDescriptor(dynamic_typing=True)).value)
         self.state = State(can_history=self.declare_parameter("can_history", 200).value)
 
@@ -301,6 +301,12 @@ class OperatorConsole(Node):
         self._streams = collections.OrderedDict()
         self._stream_lock = threading.Lock()
         self._stream_seq = 0
+
+        # One encode per frame, shared by every client. Serialised so two clients cannot
+        # encode the same frame concurrently.
+        self._encode_lock = threading.Lock()
+        self._enc_seq = -1
+        self._enc_jpeg = None
 
         # Best-effort, depth 1. A reliable subscriber would queue 6 MB messages faster than
         # Python can drain them; for a viewer, the newest frame is the only one that
@@ -430,29 +436,42 @@ class OperatorConsole(Node):
         cv2.imwrite(path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
         return path, None
 
-    def encode_stream_frame(self):
-        """Return (jpeg_bytes, frame_seq) for the newest frame.
-
-        Resizes inside the lock rather than copying the full-resolution frame and resizing
-        afterwards. The copy existed only to release the lock sooner, but resize already
-        writes to a fresh buffer, so it was ~1.1 ms of pure memcpy per streamed frame for
-        no benefit.
-        """
+    def current_seq(self):
+        """Cheap check for whether a new frame exists. Callers MUST use this before
+        encode_stream_frame(): encoding costs ~7 ms, and a poll loop that encodes first and
+        checks the sequence afterwards becomes a busy-encode loop that starves the executor
+        feeding it frames."""
         with self.state.lock:
-            frame = self.state.frame
-            seq = self.state.frame_seq
-            if frame is None:
-                return None, seq
-            if self.stream_width and frame.shape[1] > self.stream_width:
-                scale = self.stream_width / float(frame.shape[1])
-                frame = cv2.resize(frame, None, fx=scale, fy=scale,
-                                   interpolation=cv2.INTER_AREA)
-            else:
-                frame = frame.copy()
+            return self.state.frame_seq
 
-        ok, buf = cv2.imencode(".jpg", frame,
-                               [int(cv2.IMWRITE_JPEG_QUALITY), int(self.stream_quality)])
-        return (buf.tobytes() if ok else None), seq
+    def encode_stream_frame(self):
+        """Return (jpeg_bytes, frame_seq) for the newest frame, encoding at most once per
+        frame no matter how many clients are streaming.
+
+        Resizes inside the state lock rather than copying the full-resolution frame and
+        resizing after: the copy existed only to release the lock sooner, but resize
+        already writes to a fresh buffer, so it was ~1.1 ms of pure memcpy per frame.
+        """
+        with self._encode_lock:
+            with self.state.lock:
+                seq = self.state.frame_seq
+                if seq == self._enc_seq:
+                    return self._enc_jpeg, seq          # another client already encoded it
+                frame = self.state.frame
+                if frame is None:
+                    return None, seq
+                if self.stream_width and frame.shape[1] > self.stream_width:
+                    scale = self.stream_width / float(frame.shape[1])
+                    frame = cv2.resize(frame, None, fx=scale, fy=scale,
+                                       interpolation=cv2.INTER_AREA)
+                else:
+                    frame = frame.copy()
+
+            ok, buf = cv2.imencode(".jpg", frame,
+                                   [int(cv2.IMWRITE_JPEG_QUALITY), int(self.stream_quality)])
+            self._enc_jpeg = buf.tobytes() if ok else None
+            self._enc_seq = seq
+            return self._enc_jpeg, seq
 
     def status(self):
         st = self.state
@@ -615,6 +634,11 @@ def make_handler(node):
             """
             sid, cancelled = node.register_stream()
             sock = self.connection
+            peer = "%s:%s" % self.client_address
+            node.get_logger().info(
+                "stream %d open from %s (active=%d)" % (sid, peer, node.active_streams()))
+            reason = "closed"
+            sent = 0
             try:
                 # Small enough that only a frame or two can be in flight. The kernel
                 # doubles the requested value.
@@ -649,10 +673,18 @@ def make_handler(node):
                         if stalled_since is None:
                             stalled_since = now
                         elif now - stalled_since > node.stream_stall_timeout:
+                            reason = "stalled %.0fs (client not draining)" % (
+                                now - stalled_since)
                             break
                         time.sleep(0.002)
                         continue
                     stalled_since = None
+
+                    # Check the sequence BEFORE encoding. Encoding first and
+                    # discarding afterwards costs a full resize+JPEG on every poll.
+                    if node.current_seq() == last_seq:
+                        time.sleep(0.002)
+                        continue
 
                     jpeg, seq = node.encode_stream_frame()
                     if jpeg is None or seq == last_seq:
@@ -669,10 +701,16 @@ def make_handler(node):
                     self.end_headers()
                     self.wfile.write(jpeg)
                     self.wfile.write(b"\r\n")
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                pass                  # browser navigated away; normal
+                    sent += 1
+            except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+                reason = "disconnected (%s)" % type(exc).__name__
             finally:
+                if cancelled.is_set():
+                    reason = "retired: max_streams exceeded"
                 node.unregister_stream(sid)
+                node.get_logger().info(
+                    "stream %d closed after %d frames from %s -- %s"
+                    % (sid, sent, peer, reason))
 
     return Handler
 
