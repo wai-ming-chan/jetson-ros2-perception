@@ -89,10 +89,10 @@ putting frames on the bus, from one page, on a headless board.
 Two details worth calling out:
 
 - It reports the **publisher's** frame rate, which the camera node measures and publishes on
-  `publish_rate` — not the rate the console itself receives. A Python subscriber
-  deserialising ~6 MB frames reads about 9 Hz against an actual 60 Hz, so a console that
-  timed its own arrivals would understate the pipeline by 6x. Both numbers are shown, and
-  labelled for what they are.
+  `~/publish_rate` — not the rate the console itself receives. Timing your own arrivals
+  measures your own consumption: `ros2 topic hz` read **47.8 Hz while the publisher was at
+  60.0 Hz**, because deserialising ~6 MB frames in Python is slower than producing them.
+  Both figures are shown and labelled, since the gap between them is itself informative.
 - **No new dependencies.** `rclpy`, `cv2` and the Python standard library only. The
   container has no flask/fastapi and no ROS web packages, and with no Humble binaries for
   Ubuntu 20.04 every addition would have meant a source build.

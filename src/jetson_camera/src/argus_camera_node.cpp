@@ -60,7 +60,11 @@ public:
     // Publish the measured rate so consumers report the PUBLISHER's throughput
     // rather than their own. A Python subscriber deserialising 6 MB frames reads
     // far below line rate and would otherwise misreport the pipeline as slow.
-    rate_publisher_ = create_publisher<std_msgs::msg::Float32>("publish_rate", 10);
+    // "~/" makes this private to the node -> /argus_camera/publish_rate. A bare
+    // "publish_rate" would resolve against the NAMESPACE, not the node name, landing
+    // at /publish_rate and silently missing any subscriber expecting the node-scoped
+    // name.
+    rate_publisher_ = create_publisher<std_msgs::msg::Float32>("~/publish_rate", 10);
 
     start_pipeline();
     capture_thread_ = std::thread(&ArgusCameraNode::capture_loop, this);
