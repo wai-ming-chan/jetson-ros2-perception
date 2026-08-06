@@ -17,7 +17,6 @@ each extra dependency would mean a source build.
 
 import collections
 import json
-import select
 import mimetypes
 import os
 import socket
@@ -34,7 +33,7 @@ from ament_index_python.packages import get_package_share_directory
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import CameraInfo, Image
+from sensor_msgs.msg import CameraInfo, CompressedImage
 from std_msgs.msg import Float32
 
 # SocketCAN frame layout: can_id (u32), len (u8), 3 pad, data (8 bytes).
@@ -63,7 +62,7 @@ class State:
 
     def __init__(self, can_history):
         self.lock = threading.Lock()
-        self.frame = None              # latest BGR frame (numpy)
+        self.frame_jpeg = None         # latest frame, already JPEG-encoded (bytes)
         self.frame_seq = 0
         self.width = 0
         self.height = 0
@@ -72,7 +71,6 @@ class State:
         self.publisher_hz = None       # authoritative, reported BY the camera node
         self.calibrated = False
         self.calib_name = ""
-        self.stream_times = collections.deque(maxlen=60)
         self.can_frames = collections.deque(maxlen=can_history)
         self.can_status = "not started"
         self.can_count = 0
@@ -83,13 +81,6 @@ class State:
     def image_hz(self):
         return deque_hz(self.frame_times, self.lock)
 
-    def _unused_image_hz(self):
-        with self.lock:
-            t = list(self.frame_times)
-        if len(t) < 2:
-            return 0.0
-        span = t[-1] - t[0]
-        return (len(t) - 1) / span if span > 0 else 0.0
 
 
 # --------------------------------------------------------------------------------------
@@ -263,56 +254,31 @@ class OperatorConsole(Node):
         self.image_topic = self.declare_parameter("image_topic", "/image_raw").value
         self.port = self.declare_parameter("port", 8080).value
         self.can_interface = self.declare_parameter("can_interface", "can0").value
-        self.stream_width = self.declare_parameter("stream_width", 960).value
-        self.stream_quality = self.declare_parameter("stream_jpeg_quality", 75).value
-        # A CAP, not a target. Measured on this board (1080p source, MJPEG to one
-        # client), delivered rate and total host CPU:
-        #     width 640  -> ~55-60 fps, 58% cpu   (hits the cap)
-        #     width 960  -> ~36 fps,    48% cpu   (default: good detail/smoothness balance)
-        # The publisher holds 60 Hz throughout, so streaming costs CPU but not throughput.
-        # This was 15 fps hardcoded, which was the sole cause of visible lag.
-        # dynamic_typing so both `stream_fps:=60` and `stream_fps:=60.0` work.
-        # Declared strictly, an int override against a float default raises
-        # InvalidParameterTypeException and the node dies at startup.
-        self.stream_fps = float(self.declare_parameter(
-            "stream_fps", 60.0,
-            ParameterDescriptor(dynamic_typing=True)).value)
         self.capture_dir = self.declare_parameter("capture_dir", "/captures").value
         self.record_topics = self.declare_parameter(
             "record_topics", ["/image_raw", "/camera_info"]).value
         self.rate_topic = self.declare_parameter(
             "rate_topic", "/argus_camera/publish_rate").value
 
-        self.max_streams = int(self.declare_parameter("max_streams", 8).value)
-        # Seconds a client may go without accepting data before we hang up. A
-        # browser that navigates away can leave a socket whose buffer stays full:
-        # select() then reports "not writable" forever, and because the loop never
-        # attempts a write it never sees BrokenPipeError either, so without this it
-        # spins for the life of the process holding a stream slot.
-        self.stream_stall_timeout = float(self.declare_parameter(
-            "stream_stall_timeout", 10.0,
-            ParameterDescriptor(dynamic_typing=True)).value)
         self.state = State(can_history=self.declare_parameter("can_history", 200).value)
 
-        # Every page load opens another /stream.mjpg connection, and a browser does not
-        # always close the old one promptly. Without a bound, each stale connection keeps
-        # an encoder thread busy: seven connections and 24 threads were observed after a
-        # handful of reloads. Retire the oldest beyond max_streams.
-        self._streams = collections.OrderedDict()
-        self._stream_lock = threading.Lock()
-        self._stream_seq = 0
-
-        # One encode per frame, shared by every client. Serialised so two clients cannot
-        # encode the same frame concurrently.
-        self._encode_lock = threading.Lock()
-        self._enc_seq = -1
-        self._enc_jpeg = None
-
-        # Best-effort, depth 1. A reliable subscriber would queue 6 MB messages faster than
-        # Python can drain them; for a viewer, the newest frame is the only one that
-        # matters and older ones should be dropped, not buffered.
-        self.create_subscription(
-            Image, self.image_topic, self._on_image, qos_profile_sensor_data)
+        # Consume the CAMERA's JPEG stream (/image_raw/compressed, encoded in C++ by
+        # image_transport), not the raw topic. Raw frames are 6.2 MB and rclpy tops out
+        # around 13-50 Hz just deserialising them -- that ceiling was the whole reason the
+        # live view lagged. Compressed frames are ~200 KB, deserialise trivially, and are
+        # already exactly what the browser needs, so this node never touches a pixel.
+        #
+        # The subscription is ON-DEMAND, managed by a timer on the executor thread
+        # (creating/destroying subscriptions from HTTP threads would race the executor).
+        # image_transport's compressed plugin is lazy -- the camera only pays for JPEG
+        # encoding while a subscriber exists -- and that encode runs synchronously in the
+        # capture loop, costing measured throughput: 60 Hz -> ~40 Hz at 1080p while
+        # subscribed. Subscribing only while a browser is actually pulling frames hands
+        # the pipeline its full rate back the moment the last viewer goes away.
+        self._dims_checked = 0.0
+        self._image_sub = None
+        self._last_frame_request = 0.0
+        self.create_timer(1.0, self._manage_image_sub)
         self.create_subscription(
             CameraInfo, self._info_topic(), self._on_info, qos_profile_sensor_data)
         # The publisher's own measurement. Without this the console could only report the
@@ -333,40 +299,28 @@ class OperatorConsole(Node):
             "operator console on http://0.0.0.0:{} (image={}, can={})".format(
                 self.port, self.image_topic, self.can_interface))
 
-    def register_stream(self):
-        with self._stream_lock:
-            self._stream_seq += 1
-            sid = self._stream_seq
-            self._streams[sid] = threading.Event()
-            while len(self._streams) > self.max_streams:
-                old_sid, old_ev = next(iter(self._streams.items()))
-                old_ev.set()
-                del self._streams[old_sid]
-            return sid, self._streams[sid]
-
-    def unregister_stream(self, sid):
-        with self._stream_lock:
-            self._streams.pop(sid, None)
-
-    def active_streams(self):
-        with self._stream_lock:
-            return len(self._streams)
+    def _manage_image_sub(self):
+        want = (time.monotonic() - self._last_frame_request) < 5.0
+        if want and self._image_sub is None:
+            self._image_sub = self.create_subscription(
+                CompressedImage, self.image_topic + "/compressed",
+                self._on_compressed, qos_profile_sensor_data)
+            self.get_logger().info("viewer active: subscribed to compressed stream")
+        elif not want and self._image_sub is not None:
+            self.destroy_subscription(self._image_sub)
+            self._image_sub = None
+            self.get_logger().info(
+                "no viewer for 5 s: unsubscribed; camera stops paying for JPEG encode")
 
     def _info_topic(self):
         base = self.image_topic.rsplit("/", 1)[0]
         return (base + "/camera_info") if base else "/camera_info"
 
-    def _on_image(self, msg):
-        if msg.encoding not in ("bgr8", "rgb8"):
-            return
-        frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
-        if msg.encoding == "rgb8":
-            frame = frame[:, :, ::-1]
+    def _on_compressed(self, msg):
         with self.state.lock:
-            self.state.frame = frame
+            self.state.frame_jpeg = bytes(msg.data)
             self.state.frame_seq += 1
-            self.state.width, self.state.height = msg.width, msg.height
-            self.state.encoding = msg.encoding
+            self.state.encoding = msg.format
             self.state.frame_times.append(time.monotonic())
 
     def _on_rate(self, msg):
@@ -427,51 +381,46 @@ class OperatorConsole(Node):
         return "not recording"
 
     def snapshot(self):
-        with self.state.lock:
-            frame = None if self.state.frame is None else self.state.frame.copy()
-        if frame is None:
+        jpeg, _ = self.get_frame()
+        if jpeg is None:
             return None, "no frame available"
         path = os.path.join(
             self.capture_dir, "snapshot_{}.jpg".format(time.strftime("%Y%m%d_%H%M%S")))
-        cv2.imwrite(path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+        # The frame is already a JPEG from the camera's encoder; write the bytes as-is
+        # rather than decoding and re-encoding (which would also lose quality).
+        with open(path, "wb") as fh:
+            fh.write(jpeg)
         return path, None
 
     def current_seq(self):
-        """Cheap check for whether a new frame exists. Callers MUST use this before
-        encode_stream_frame(): encoding costs ~7 ms, and a poll loop that encodes first and
-        checks the sequence afterwards becomes a busy-encode loop that starves the executor
-        feeding it frames."""
+        """Sequence number of the newest frame; used by long-poll waits."""
         with self.state.lock:
             return self.state.frame_seq
 
-    def encode_stream_frame(self):
-        """Return (jpeg_bytes, frame_seq) for the newest frame, encoding at most once per
-        frame no matter how many clients are streaming.
+    def get_frame(self):
+        """Return (jpeg_bytes, frame_seq) for the newest frame. No encoding happens here
+        at all -- the camera's image_transport plugin already produced the JPEG in C++."""
+        with self.state.lock:
+            return self.state.frame_jpeg, self.state.frame_seq
 
-        Resizes inside the state lock rather than copying the full-resolution frame and
-        resizing after: the copy existed only to release the lock sooner, but resize
-        already writes to a fresh buffer, so it was ~1.1 ms of pure memcpy per frame.
+    def _dims(self):
+        """(width, height) of the current frame, decoded at most every 5 s.
+
+        CompressedImage carries no dimensions, and decoding every frame just to read its
+        size would reintroduce the per-frame CPU cost this refactor removed. Resolution
+        changes only when the camera restarts in a new mode, so a slow probe is fine.
         """
-        with self._encode_lock:
-            with self.state.lock:
-                seq = self.state.frame_seq
-                if seq == self._enc_seq:
-                    return self._enc_jpeg, seq          # another client already encoded it
-                frame = self.state.frame
-                if frame is None:
-                    return None, seq
-                if self.stream_width and frame.shape[1] > self.stream_width:
-                    scale = self.stream_width / float(frame.shape[1])
-                    frame = cv2.resize(frame, None, fx=scale, fy=scale,
-                                       interpolation=cv2.INTER_AREA)
-                else:
-                    frame = frame.copy()
-
-            ok, buf = cv2.imencode(".jpg", frame,
-                                   [int(cv2.IMWRITE_JPEG_QUALITY), int(self.stream_quality)])
-            self._enc_jpeg = buf.tobytes() if ok else None
-            self._enc_seq = seq
-            return self._enc_jpeg, seq
+        now = time.monotonic()
+        if now - self._dims_checked > 5.0:
+            self._dims_checked = now
+            jpeg, _ = self.get_frame()
+            if jpeg is not None:
+                img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+                if img is not None:
+                    with self.state.lock:
+                        self.state.height, self.state.width = img.shape[:2]
+        with self.state.lock:
+            return self.state.width, self.state.height
 
     def status(self):
         st = self.state
@@ -481,9 +430,9 @@ class OperatorConsole(Node):
             payload = {
                 "image": {
                     "topic": self.image_topic,
-                    "width": st.width, "height": st.height,
                     "encoding": st.encoding,
-                    "connected": st.frame is not None,
+                    "connected": bool(st.frame_times) and
+                                 (time.monotonic() - st.frame_times[-1]) < 2.0,
                     "publisher_hz": st.publisher_hz,
                 },
                 "calibration": {"loaded": st.calibrated, "model": st.calib_name},
@@ -500,8 +449,7 @@ class OperatorConsole(Node):
                 },
             }
         payload["image"]["console_rx_hz"] = round(st.image_hz(), 2)
-        payload["image"]["stream_hz"] = round(deque_hz(st.stream_times, st.lock), 2)
-        payload["image"]["stream_clients"] = self.active_streams()
+        payload["image"]["width"], payload["image"]["height"] = self._dims()
         payload["host"] = {
             "cpu": cpu_percent(), "gpu": gpu_percent(),
             "power": power_mode(), "temp": soc_temp_c(),
@@ -555,8 +503,6 @@ def make_handler(node):
             if path == "/api/can":
                 with node.state.lock:
                     return self._json(list(node.state.can_frames)[:80])
-            if path == "/stream.mjpg":
-                return self._stream()
             if path == "/frame.jpg":
                 return self._frame()
             if path.startswith("/static/"):
@@ -606,111 +552,44 @@ def make_handler(node):
             self.wfile.write(body)
 
         def _frame(self):
-            """One JPEG. Used when the live stream is paused, so the panel shows a frozen
-            last frame instead of collapsing to an empty box."""
-            jpeg, _ = node.encode_stream_frame()
+            """One JPEG, optionally long-polled.
+
+            Marks the viewer active, which makes the management timer (re)subscribe. The
+            first request after an idle period may therefore return a stale frame while
+            the subscription spins up (~1-2 s); the long-poll timeout covers the gap.
+
+            With ?since=<seq>, the request is held (up to ~1.5 s) until a frame newer
+            than <seq> exists, then answered. The client's next request can therefore be
+            issued immediately after the previous frame renders, and every response is a
+            fresh frame -- without this, a self-paced client wastes most of its round
+            trips fetching duplicates (measured: 733 requests, 206 distinct frames).
+            The frame's sequence number is returned in X-Frame-Seq for the client to
+            chain. Without ?since it answers immediately (paused view, first request).
+            """
+            node._last_frame_request = time.monotonic()
+            since = -1
+            if "?" in self.path:
+                for kv in self.path.split("?", 1)[1].split("&"):
+                    if kv.startswith("since="):
+                        try:
+                            since = int(kv[6:])
+                        except ValueError:
+                            pass
+            if since >= 0:
+                deadline = time.monotonic() + 1.5
+                while node.current_seq() == since and time.monotonic() < deadline:
+                    time.sleep(0.004)
+
+            jpeg, seq = node.get_frame()
             if jpeg is None:
                 return self.send_error(503, "no frame available")
             self.send_response(200)
             self.send_header("Content-Type", "image/jpeg")
             self.send_header("Content-Length", str(len(jpeg)))
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Frame-Seq", str(seq))
             self.end_headers()
             self.wfile.write(jpeg)
-
-        def _stream(self):
-            """multipart/x-mixed-replace MJPEG, with frames DROPPED rather than queued.
-
-            The naive loop writes every frame regardless of whether the client is keeping
-            up. Anything the client has not drained sits in the kernel send buffer, which
-            defaults to as much as 4 MB here -- over a hundred JPEGs. MJPEG is displayed in
-            order, so the viewer falls steadily further behind: observed as several seconds
-            of lag, with 230 KB already queued on one socket.
-
-            Two changes bound it. The send buffer is capped so the kernel cannot hoard
-            frames, and the socket is polled for writability before each send; when the
-            client is behind, the frame is discarded instead of buffered. For a live view,
-            a dropped frame is always better than a stale one.
-            """
-            sid, cancelled = node.register_stream()
-            sock = self.connection
-            peer = "%s:%s" % self.client_address
-            node.get_logger().info(
-                "stream %d open from %s (active=%d)" % (sid, peer, node.active_streams()))
-            reason = "closed"
-            sent = 0
-            try:
-                # Small enough that only a frame or two can be in flight. The kernel
-                # doubles the requested value.
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 128 * 1024)
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            except OSError:
-                pass
-
-            self.send_response(200)
-            self.send_header("Age", "0")
-            self.send_header("Cache-Control", "no-cache, private")
-            self.send_header("Pragma", "no-cache")
-            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=FRAME")
-            self.end_headers()
-
-            last_seq = -1
-            min_interval = 1.0 / max(1.0, float(node.stream_fps))
-            next_send = 0.0
-            stalled_since = None
-            try:
-                while not cancelled.is_set():
-                    now = time.monotonic()
-                    if now < next_send:
-                        time.sleep(min(0.002, next_send - now))
-                        continue
-
-                    # Writable means the send buffer has drained. If it has not, the client
-                    # is behind: skip this frame rather than adding to the backlog. If it
-                    # stays unwritable past the timeout the client is gone, not merely
-                    # slow, so hang up and free the slot.
-                    if not select.select([], [sock], [], 0)[1]:
-                        if stalled_since is None:
-                            stalled_since = now
-                        elif now - stalled_since > node.stream_stall_timeout:
-                            reason = "stalled %.0fs (client not draining)" % (
-                                now - stalled_since)
-                            break
-                        time.sleep(0.002)
-                        continue
-                    stalled_since = None
-
-                    # Check the sequence BEFORE encoding. Encoding first and
-                    # discarding afterwards costs a full resize+JPEG on every poll.
-                    if node.current_seq() == last_seq:
-                        time.sleep(0.002)
-                        continue
-
-                    jpeg, seq = node.encode_stream_frame()
-                    if jpeg is None or seq == last_seq:
-                        time.sleep(0.002)
-                        continue
-
-                    last_seq = seq
-                    next_send = now + min_interval
-                    with node.state.lock:
-                        node.state.stream_times.append(now)
-                    self.wfile.write(b"--FRAME\r\n")
-                    self.send_header("Content-Type", "image/jpeg")
-                    self.send_header("Content-Length", str(len(jpeg)))
-                    self.end_headers()
-                    self.wfile.write(jpeg)
-                    self.wfile.write(b"\r\n")
-                    sent += 1
-            except (BrokenPipeError, ConnectionResetError, OSError) as exc:
-                reason = "disconnected (%s)" % type(exc).__name__
-            finally:
-                if cancelled.is_set():
-                    reason = "retired: max_streams exceeded"
-                node.unregister_stream(sid)
-                node.get_logger().info(
-                    "stream %d closed after %d frames from %s -- %s"
-                    % (sid, sent, peer, reason))
 
     return Handler
 

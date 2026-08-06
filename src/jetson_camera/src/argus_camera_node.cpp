@@ -14,6 +14,7 @@
 #include <gst/gst.h>
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -48,6 +49,8 @@ public:
     // Argus auto-exposure needs a few frames to converge; the first frames come out
     // black or as full-scale noise. Dropping them avoids publishing garbage at startup.
     warmup_frames_ = declare_parameter<int>("warmup_frames", 30);
+    // Seconds without a frame before the pipeline is torn down and rebuilt.
+    stall_restart_s_ = declare_parameter<int>("stall_restart_sec", 5);
     report_interval_s_ = declare_parameter<double>("rate_report_interval", 5.0);
     // 0 = use all available cores; 1 = GStreamer's single-threaded default.
     convert_threads_ = declare_parameter<int>("convert_threads", 0);
@@ -73,6 +76,11 @@ public:
   ~ArgusCameraNode() override
   {
     stop();
+  }
+
+  bool unrecoverable() const
+  {
+    return unrecoverable_;
   }
 
 private:
@@ -128,30 +136,115 @@ private:
       throw std::runtime_error(
               "failed to set pipeline PLAYING -- is /tmp/argus_socket mounted?");
     }
-    RCLCPP_INFO(get_logger(), "camera streaming at %dx%d@%d", width_, height_, framerate_);
+    // Deliberately NOT "camera streaming": set_state returns ASYNC, so at this point
+    // nothing proves capture works. When a second process held the only Argus session,
+    // the old success log printed and then no frame ever arrived.
+    RCLCPP_INFO(
+      get_logger(), "pipeline PLAYING requested (%dx%d@%d); waiting for first frame",
+      width_, height_, framerate_);
   }
 
   void capture_loop()
   {
     int64_t frames_seen = 0;
+    int stalled_seconds = 0;
+    int rebuilds_without_frame = 0;
+    bool announced = false;
 
     while (running_ && rclcpp::ok()) {
-      GstSample * sample = gst_app_sink_pull_sample(GST_APP_SINK(appsink_));
-      if (!sample) {
-        if (running_) {
-          RCLCPP_WARN(get_logger(), "appsink returned no sample; stream ended");
-        }
-        break;
-      }
+      // Bounded wait. gst_app_sink_pull_sample() blocks FOREVER when the pipeline wedges
+      // (nvargus-daemon dying is a known L4T failure mode), leaving a node that looks
+      // alive -- services answer, topics exist -- but never publishes again.
+      GstSample * sample =
+        gst_app_sink_try_pull_sample(GST_APP_SINK(appsink_), GST_SECOND);
 
-      if (frames_seen++ < warmup_frames_) {
+      if (sample) {
+        stalled_seconds = 0;
+        rebuilds_without_frame = 0;
+        if (frames_seen++ < warmup_frames_) {
+          gst_sample_unref(sample);
+          continue;
+        }
+        if (!announced) {
+          announced = true;
+          RCLCPP_INFO(get_logger(), "capture confirmed: first frame published");
+        }
+        publish(sample);
+        report_rate();
         gst_sample_unref(sample);
         continue;
       }
 
-      publish(sample);
-      report_rate();
-      gst_sample_unref(sample);
+      if (!running_ || !rclcpp::ok()) {
+        break;
+      }
+
+      const bool ended = gst_app_sink_is_eos(GST_APP_SINK(appsink_));
+      if (!ended && ++stalled_seconds < stall_restart_s_) {
+        continue;
+      }
+
+      if (ended) {
+        RCLCPP_ERROR(get_logger(), "capture stream ended (EOS); rebuilding pipeline");
+      } else {
+        RCLCPP_ERROR(
+          get_logger(), "no frame for %d s; assuming wedged pipeline, rebuilding",
+          stalled_seconds);
+      }
+
+      // A rebuild "succeeding" only means PLAYING was accepted -- with Argus held by
+      // another process that happens and still no frame ever arrives. Cap consecutive
+      // rebuilds that yield nothing, or this would cycle forever.
+      if (rebuilds_without_frame >= 3 || !rebuild_pipeline()) {
+        break;
+      }
+      ++rebuilds_without_frame;
+      stalled_seconds = 0;
+      frames_seen = 0;      // Argus AE reconverges after a restart: drop warmup again
+      announced = false;
+    }
+
+    // Reaching here while the node should still be running means capture is
+    // unrecoverable (nvargus-daemon dead, camera held by another process, ...). The old
+    // behaviour was to leave the node up publishing nothing -- a zombie that looks
+    // healthy from outside and freezes every consumer. Shut down instead, so a
+    // supervisor (launch respawn, systemd, docker restart policy) can act.
+    if (running_ && rclcpp::ok()) {
+      RCLCPP_FATAL(get_logger(), "capture is unrecoverable; shutting down node");
+      unrecoverable_ = true;
+      rclcpp::shutdown();
+    }
+  }
+
+  bool rebuild_pipeline()
+  {
+    for (int attempt = 1; attempt <= 3 && running_ && rclcpp::ok(); ++attempt) {
+      teardown_pipeline();
+      std::this_thread::sleep_for(std::chrono::seconds(2));
+      try {
+        start_pipeline();
+        RCLCPP_INFO(get_logger(), "pipeline restarted (attempt %d)", attempt);
+        return true;
+      } catch (const std::exception & e) {
+        RCLCPP_ERROR(
+          get_logger(), "pipeline restart attempt %d failed: %s", attempt, e.what());
+      }
+    }
+    return false;
+  }
+
+  void teardown_pipeline()
+  {
+    if (pipeline_) {
+      gst_element_set_state(pipeline_, GST_STATE_NULL);
+    }
+    if (appsink_) {
+      gst_object_unref(appsink_);
+      appsink_ = nullptr;
+    }
+    if (pipeline_) {
+      gst_object_unref(pipeline_);
+      pipeline_ = nullptr;
     }
   }
 
@@ -220,24 +313,16 @@ private:
 
   void stop()
   {
+    // Join first: the capture thread's pull has a one second bound, so it notices
+    // running_ promptly, and only this thread ever touches the pipeline afterwards.
+    // (The previous version poked the pipeline from here while the capture thread was
+    // still using it, and its emit_signals call never unblocked anything anyway --
+    // only the state change to NULL did.)
     running_ = false;
-
-    if (appsink_) {
-      // Unblocks a capture thread parked in gst_app_sink_pull_sample().
-      gst_app_sink_set_emit_signals(GST_APP_SINK(appsink_), FALSE);
-      gst_element_set_state(pipeline_, GST_STATE_NULL);
-    }
     if (capture_thread_.joinable()) {
       capture_thread_.join();
     }
-    if (appsink_) {
-      gst_object_unref(appsink_);
-      appsink_ = nullptr;
-    }
-    if (pipeline_) {
-      gst_object_unref(pipeline_);
-      pipeline_ = nullptr;
-    }
+    teardown_pipeline();
   }
 
   int sensor_id_{0};
@@ -246,6 +331,7 @@ private:
   int framerate_{60};
   int flip_method_{0};
   int warmup_frames_{30};
+  int stall_restart_s_{5};
   double report_interval_s_{5.0};
   int convert_threads_{0};
   int64_t frames_since_report_{0};
@@ -258,6 +344,7 @@ private:
   GstElement * appsink_{nullptr};
   std::thread capture_thread_;
   std::atomic<bool> running_{true};
+  std::atomic<bool> unrecoverable_{false};
 
   std::shared_ptr<camera_info_manager::CameraInfoManager> camera_info_manager_;
   image_transport::CameraPublisher publisher_;
@@ -273,7 +360,13 @@ int main(int argc, char ** argv)
 
   int exit_code = 0;
   try {
-    rclcpp::spin(std::make_shared<jetson_camera::ArgusCameraNode>());
+    auto node = std::make_shared<jetson_camera::ArgusCameraNode>();
+    rclcpp::spin(node);
+    // Exit non-zero when capture died rather than the user asking us to stop, so
+    // Restart=on-failure supervisors distinguish the two.
+    if (node->unrecoverable()) {
+      exit_code = 1;
+    }
   } catch (const std::exception & e) {
     RCLCPP_FATAL(rclcpp::get_logger("argus_camera"), "%s", e.what());
     exit_code = 1;

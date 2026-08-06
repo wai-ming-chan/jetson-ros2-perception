@@ -137,9 +137,9 @@
       <div class="kv"><span class="k">Resolution</span><span class="v" id="res">—</span></div>
       <div class="kv"><span class="k">Publisher rate</span><span class="v" id="hz">—</span></div>
       <div class="kv"><span class="k">Stream to browser</span><span class="v" id="streamhz"
-        title="Measured in this browser: one JPEG is requested, decoded, then the next is requested. Self-paced, so it cannot fall behind the server.">—</span></div>
+        title="True new-frame rate in this browser. Long-polled: the server holds each request until a frame newer than the last shown exists, so no round trip is spent on a duplicate.">—</span></div>
       <div class="kv"><span class="k">Console rx rate</span><span class="v" id="rxhz"
-        title="Rate this console receives frames. Lower than the publisher rate is expected: it is a Python subscriber and drops stale frames rather than queueing them.">—</span></div>
+        title="Rate the console receives frames on /image_raw/compressed (~200 KB JPEGs encoded in C++ by the camera). Should track the publisher rate closely; the old 6 MB raw-frame path capped this at 13-50 Hz.">—</span></div>
       <div class="kv"><span class="k">Encoding</span><span class="v" id="enc">—</span></div>
       <div class="kv"><span class="k">Calibration</span><span class="v" id="calib">—</span></div>
       <div class="kv"><span class="k">Power mode</span><span class="v" id="power">—</span></div>
@@ -208,20 +208,37 @@ const chip = (el, val) => { $(el).querySelector('b').textContent = val; };
 // image has decoded, so the browser sets the rate and there is never a backlog anywhere.
 // It costs one HTTP round trip per frame, which on this link is under a millisecond.
 let live = true;
+let lastSeq = -1;
+let prevUrl = null;
+let pumpId = 0;
 let frameTimes = [];
 
-function pump() {
-  if (!live) return;
-  const img = new Image();
-  img.onload = () => {
-    $('video').src = img.src;
-    const now = performance.now();
-    frameTimes.push(now);
-    if (frameTimes.length > 30) frameTimes.shift();
-    if (live) requestAnimationFrame(pump);   // yields to the renderer between frames
-  };
-  img.onerror = () => { if (live) setTimeout(pump, 500); };
-  img.src = '/frame.jpg?t=' + Date.now();
+// Long-poll loop: ask for a frame newer than the last one we showed; the server holds
+// the request until one exists. Every response is fresh, so the displayed rate below is
+// true new-frame throughput, not request throughput. fetch() is used instead of an <img>
+// URL because the frame's sequence number comes back in a response header.
+async function pump(id) {
+  while (live && id === pumpId) {
+    try {
+      const r = await fetch('/frame.jpg?since=' + lastSeq, { cache: 'no-store' });
+      if (!r.ok) { await new Promise(res => setTimeout(res, 500)); continue; }
+      lastSeq = parseInt(r.headers.get('X-Frame-Seq') || '-1', 10);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      await new Promise((res, rej) => {
+        const img = $('video');
+        img.onload = res;
+        img.onerror = rej;
+        img.src = url;
+      });
+      if (prevUrl) URL.revokeObjectURL(prevUrl);
+      prevUrl = url;
+      frameTimes.push(performance.now());
+      if (frameTimes.length > 30) frameTimes.shift();
+    } catch (e) {
+      await new Promise(res => setTimeout(res, 500));
+    }
+  }
 }
 
 function browserFps() {
@@ -235,7 +252,7 @@ function setLive(on) {
   $('livebtn').textContent  = on ? 'Stop live' : 'Go live';
   $('livebtn').className    = on ? '' : 'primary';
   $('livehint').textContent = on ? '' : 'paused — showing last frame';
-  if (on) { frameTimes = []; pump(); }
+  if (on) { frameTimes = []; pump(++pumpId); }
 }
 
 let recording = false;

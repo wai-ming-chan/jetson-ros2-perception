@@ -28,5 +28,9 @@ def generate_launch_description():
             name='argus_camera',
             parameters=[params_file],
             output='screen',
+            # The node now exits rather than lingering as a zombie when capture is
+            # unrecoverable; respawn turns that exit into a recovery attempt.
+            respawn=True,
+            respawn_delay=2.0,
         ),
     ])
