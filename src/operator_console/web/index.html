@@ -37,15 +37,14 @@
 
   main { display:grid; gap:12px; padding:12px;
          grid-template-columns:minmax(0,1.55fr) minmax(300px,1fr);
-         grid-template-areas: "camera pipeline" "capture can" "traffic traffic"; }
+         grid-template-areas: "camera pipeline" "traffic can"; }
   #camera  { grid-area:camera; }
   #pipeline{ grid-area:pipeline; }
-  #capture { grid-area:capture; }
   #canbus  { grid-area:can; }
   #traffic { grid-area:traffic; }
   @media (max-width:960px) {
     main { grid-template-columns:1fr;
-           grid-template-areas:"camera" "pipeline" "capture" "can" "traffic"; }
+           grid-template-areas:"camera" "pipeline" "can" "traffic"; }
   }
 
   .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
@@ -124,8 +123,10 @@
       <img id="video" alt="camera stream">
       <div id="camfoot">
         <button id="livebtn"
-          title="Pauses the MJPEG stream and shows a frozen frame. Frees CPU and network. Measured on this board: no significant effect on publisher rate — it holds ~60 Hz either way.">Stop live</button>
+          title="Pauses the frame loop and keeps the last frame on screen. While no viewer is active the console also unsubscribes, so the camera stops paying for JPEG encoding.">Stop live</button>
         <button id="snapbtn">Snapshot</button>
+        <button id="recbtn" class="primary">Start recording</button>
+        <span id="recinfo" class="rec blink" style="font-size:12px"></span>
         <span class="hint" id="livehint" style="margin:0"></span>
       </div>
     </div>
@@ -146,20 +147,7 @@
       <div class="kv"><span class="k">CPU</span><span class="v" id="cpu">—</span></div>
       <div class="kv"><span class="k">GPU</span><span class="v" id="gpu">—</span></div>
       <div class="kv"><span class="k">SoC temp</span><span class="v" id="temp">—</span></div>
-    </div>
-  </section>
-
-  <section class="card" id="capture">
-    <h2>Data capture</h2>
-    <div class="body">
-      <div class="kv"><span class="k">Status</span><span class="v" id="recstate">idle</span></div>
-      <div class="kv"><span class="k">Elapsed</span><span class="v" id="recelapsed">—</span></div>
-      <div class="kv"><span class="k">Size</span><span class="v" id="recsize">—</span></div>
       <div class="kv"><span class="k">Disk free</span><span class="v" id="disk">—</span></div>
-      <div class="row" style="margin-top:11px">
-        <button id="recbtn" class="primary">Start recording</button>
-      </div>
-      <div class="hint" id="capmsg"></div>
     </div>
   </section>
 
@@ -288,13 +276,11 @@ async function poll() {
     chip('c_disk', fmt(h.disk_free_gb, ' GB'));
 
     recording = s.recording.active;
-    $('recstate').innerHTML = recording
-      ? '<span class="rec blink">● RECORDING</span>' : 'idle';
-    $('recelapsed').textContent = recording ? fmt(s.recording.elapsed, ' s') : '—';
-    $('recsize').textContent    = recording ? fmt(s.recording.size_mb, ' MB') : '—';
-    $('recbtn').textContent     = recording ? 'Stop recording' : 'Start recording';
-    $('recbtn').className       = recording ? 'danger' : 'primary';
-    if (recording && s.recording.path) $('capmsg').textContent = s.recording.path;
+    $('recbtn').textContent = recording ? 'Stop recording' : 'Start recording';
+    $('recbtn').className   = recording ? 'danger' : 'primary';
+    $('recinfo').textContent = recording
+      ? `● ${fmt(s.recording.elapsed, ' s', 0)} · ${fmt(s.recording.size_mb, ' MB', 0)}` : '';
+    $('recinfo').title = s.recording.path || '';
 
     $('canif').textContent    = s.can.interface;
     $('canstate').textContent = s.can.status;
@@ -336,7 +322,7 @@ $('livebtn').onclick = () => setLive(!live);
 $('recbtn').onclick = async () => {
   $('recbtn').disabled = true;
   const r = await post(recording ? '/api/record/stop' : '/api/record/start');
-  if (r.error) $('capmsg').textContent = 'error: ' + r.error;
+  if (r.error) $('livehint').textContent = 'error: ' + r.error;
   $('recbtn').disabled = false;
   poll();
 };
