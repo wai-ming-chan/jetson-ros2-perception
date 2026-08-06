@@ -41,9 +41,20 @@ mkdir -p "$CAPTURES"
 # headless runs are unaffected. On the host you may need to allow local connections once:
 #     xhost +local:root
 GUI_ARGS=()
-if [ -n "${DISPLAY:-}" ] && [ -d /tmp/.X11-unix ]; then
-    GUI_ARGS+=(-e "DISPLAY=$DISPLAY" -v /tmp/.X11-unix:/tmp/.X11-unix)
-    [ -f "$HOME/.Xauthority" ] && GUI_ARGS+=(-v "$HOME/.Xauthority:/root/.Xauthority:ro")
+if [ -n "${DISPLAY:-}" ]; then
+    GUI_ARGS+=(-e "DISPLAY=$DISPLAY")
+    [ -d /tmp/.X11-unix ] && GUI_ARGS+=(-v /tmp/.X11-unix:/tmp/.X11-unix)
+
+    # Find the auth cookie. There is no ~/.Xauthority on this system: the local GNOME
+    # session's cookie lives under /run/user/<uid>/gdm/. An `ssh -X` login does create
+    # ~/.Xauthority, so check both and mount whichever exists.
+    XAUTH="${XAUTHORITY:-$HOME/.Xauthority}"
+    if [ -f "$XAUTH" ]; then
+        GUI_ARGS+=(-v "$XAUTH:/root/.Xauthority:ro" -e "XAUTHORITY=/root/.Xauthority")
+    else
+        echo "note: DISPLAY=$DISPLAY but no X cookie found (looked at $XAUTH)." >&2
+        echo "      For the local desktop: export XAUTHORITY=/run/user/\$(id -u)/gdm/Xauthority" >&2
+    fi
 else
     echo "note: no DISPLAY -- GUI tools (e.g. cameracalibrator) will not work." >&2
 fi
