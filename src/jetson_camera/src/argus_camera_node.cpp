@@ -48,6 +48,8 @@ public:
     // black or as full-scale noise. Dropping them avoids publishing garbage at startup.
     warmup_frames_ = declare_parameter<int>("warmup_frames", 30);
     report_interval_s_ = declare_parameter<double>("rate_report_interval", 5.0);
+    // 0 = use all available cores; 1 = GStreamer's single-threaded default.
+    convert_threads_ = declare_parameter<int>("convert_threads", 0);
     const auto camera_info_url = declare_parameter<std::string>("camera_info_url", "");
 
     camera_info_manager_ = std::make_shared<camera_info_manager::CameraInfoManager>(
@@ -75,14 +77,19 @@ private:
     if (!gain_range_.empty()) {
       pipeline << " gainrange=\"" << gain_range_ << "\"";
     }
-    // NVMM -> BGRx on the hardware converter, then BGR for ROS. The videoconvert step is
-    // a known CPU cost and is one of the things week 2 measures and optimises.
+    // NVMM -> BGRx on the hardware converter, then BGR for ROS.
+    //
+    // videoconvert is the one CPU-bound stage here and it defaults to a SINGLE thread.
+    // Measured at 15W: 1080p60 runs at full rate using 0.65 core, but 3840x2160@30 reaches
+    // only 26.8 Hz with one core pinned at ~74% and the other five idle -- twice the pixel
+    // rate, one thread to do it. n-threads=0 lets it use all cores.
     pipeline
       << " ! video/x-raw(memory:NVMM),width=" << width_ << ",height=" << height_
       << ",framerate=" << framerate_ << "/1"
       << " ! nvvidconv flip-method=" << flip_method_
       << " ! video/x-raw,format=BGRx"
-      << " ! videoconvert ! video/x-raw,format=BGR"
+      << " ! videoconvert n-threads=" << convert_threads_
+      << " ! video/x-raw,format=BGR"
       << " ! appsink name=sink sync=false max-buffers=2 drop=true";
     return pipeline.str();
   }
@@ -226,6 +233,7 @@ private:
   int flip_method_{0};
   int warmup_frames_{30};
   double report_interval_s_{5.0};
+  int convert_threads_{0};
   int64_t frames_since_report_{0};
   rclcpp::Time last_report_{0, 0, RCL_ROS_TIME};
   std::string frame_id_;

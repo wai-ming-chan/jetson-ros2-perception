@@ -79,7 +79,8 @@ Measured on the hardware above. *(To be filled as pipeline variants land.)*
 | Pipeline | Capture path | Resolution | Power | FPS | CPU |
 |---|---|---|---|---|---|
 | `/image_raw` (bgr8) | Argus (HW ISP) | 1920x1080@60 | 15W | **60.0** | 0.65 core, GPU idle |
-| `/image_raw` (bgr8) | Argus (HW ISP) | 3840x2160@30 | 15W | — | — |
+| `/image_raw` (bgr8) | Argus (HW ISP) | 3840x2160@30 | 15W | **29.9** | 1.0 core, GPU idle |
+| ↳ same, `videoconvert n-threads=1` | Argus (HW ISP) | 3840x2160@30 | 15W | 26.9 | one core pinned at 74% |
 | `/image_raw` (bgr8) | Argus (HW ISP) | 1920x1080@60 | 7W | — | — |
 | Passthrough | V4L2 raw + CUDA debayer | 1920x1080 | 15W | — | — |
 | + TensorRT FP16 | Argus | 1920x1080 | 15W | — | — |
