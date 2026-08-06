@@ -34,8 +34,9 @@ bag-replay regression harness in CI.
 
 ![Operator console demo](docs/media/operator-console.gif)
 
-*The operator console live: camera at 60 Hz, CAN frames injected and echoed on `can0`,
-rosbag recording toggled from the browser. ([full-quality mp4](docs/media/operator-console.mp4))*
+*The operator console live: YOLOv8 detections overlaid on the camera feed at ~30 Hz, CAN
+frames injected and echoed on `can0`, host telemetry and rosbag recording — all served from
+the board. ([full-quality mp4](docs/media/operator-console.mp4))*
 
 ## Hardware
 
@@ -53,6 +54,13 @@ Two constraints from this hardware currently:
   both `RG10` raw Bayer. There is no 12 MP mode.
 - Only **7W and 15W** power modes exist on JetPack 5. The 25W/MAXN SUPER mode is
   JetPack 6.2-exclusive, so benchmarks have two power points.
+
+## Operations
+
+[`docs/runbook.md`](docs/runbook.md) — deployment and field debugging: first-time setup on
+a fresh device, a symptom index (camera won't start, subscriber receives nothing, Ethernet
+slower than Wi-Fi, CAN transmits nothing), and the platform quirks that cost time. Written
+from real incidents; `PROGRESS.md` holds the underlying evidence.
 
 ## Why containers
 
