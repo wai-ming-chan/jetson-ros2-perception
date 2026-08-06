@@ -6,8 +6,24 @@ After=network.target
 Type=oneshot
 RemainAfterExit=yes
 # mttcan is the Tegra CAN driver; it ships in the kernel but is not autoloaded.
-ExecStart=/sbin/modprobe mttcan
-ExecStart=/sbin/ip link set can0 type can bitrate 500000
+ExecStartPre=/sbin/modprobe mttcan
+# `ip link set ... type can` is rejected on an interface that is already UP, so a
+# re-run (e.g. after editing this unit) would silently keep the OLD configuration.
+# The leading '-' tolerates the first boot, when can0 is not up yet.
+ExecStartPre=-/sbin/ip link set down can0
+#
+# loopback on: REQUIRED for a single-node bus, which is what this board is today.
+# A CAN transmission must be acknowledged by another node; with nobody else on the wire
+# the controller retries, fails, and drops to ERROR-PASSIVE with TX packets stuck at 0
+# -- which presents as "the Send button does nothing". Loopback makes the controller
+# acknowledge and echo its own frames, so the path is exercisable end to end.
+#
+# WITH A REAL BUS: delete `loopback on` below. Leaving it on means this node will not
+# hear other devices, and its frames will not reach them.
+#
+# restart-ms 100: auto-recover from bus-off instead of staying dead until a manual
+# `ip link` cycle.
+ExecStart=/sbin/ip link set can0 type can bitrate 500000 loopback on restart-ms 100
 ExecStart=/sbin/ip link set up can0
 ExecStop=/sbin/ip link set down can0
 

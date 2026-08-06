@@ -21,7 +21,11 @@ for unit in jetson-eee-off jetson-can0; do
 done
 systemctl daemon-reload
 for unit in jetson-eee-off jetson-can0; do
-    systemctl enable --now "$unit.service" >/dev/null 2>&1 || \
+    systemctl enable "$unit.service" >/dev/null 2>&1 || true
+    # `enable --now` does NOT re-run a oneshot that is already active (these use
+    # RemainAfterExit=yes), so re-running this script after editing a unit would appear
+    # to succeed while changing nothing. restart always applies the current file.
+    systemctl restart "$unit.service" >/dev/null 2>&1 || \
         echo "  warning: $unit did not start (check: systemctl status $unit)"
     echo "installed + enabled: $unit.service"
 done
