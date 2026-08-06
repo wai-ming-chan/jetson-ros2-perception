@@ -36,6 +36,18 @@ CAPTURES="${CAPTURES:-$HOME/captures}"
 
 mkdir -p "$CAPTURES"
 
+# X11 forwarding, for tools that need a window -- cameracalibrator above all, since its
+# whole interface is an OpenCV window. Only wired up when a display actually exists, so
+# headless runs are unaffected. On the host you may need to allow local connections once:
+#     xhost +local:root
+GUI_ARGS=()
+if [ -n "${DISPLAY:-}" ] && [ -d /tmp/.X11-unix ]; then
+    GUI_ARGS+=(-e "DISPLAY=$DISPLAY" -v /tmp/.X11-unix:/tmp/.X11-unix)
+    [ -f "$HOME/.Xauthority" ] && GUI_ARGS+=(-v "$HOME/.Xauthority:/root/.Xauthority:ro")
+else
+    echo "note: no DISPLAY -- GUI tools (e.g. cameracalibrator) will not work." >&2
+fi
+
 exec docker run -it --rm \
     --network host \
     --ipc host \
@@ -43,6 +55,6 @@ exec docker run -it --rm \
     -v /tmp/argus_socket:/tmp/argus_socket \
     -v "$WORKSPACE:/workspace" \
     -v "$CAPTURES:/captures" \
-    -e DISPLAY="${DISPLAY:-}" \
+    "${GUI_ARGS[@]}" \
     "$IMAGE" \
     "$@"
