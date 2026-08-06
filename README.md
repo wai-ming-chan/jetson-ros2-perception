@@ -63,6 +63,40 @@ From another shell, confirm frames are flowing:
 ros2 topic hz /image_raw
 ```
 
+## Operator console
+
+A browser-based control surface for the stack — camera, pipeline telemetry, CAN traffic,
+and the controls to actually operate it.
+
+```bash
+ros2 launch operator_console console.launch.py     # then open http://<jetson>:8080
+```
+
+<!-- TODO: screenshot / GIF -->
+
+| Shows | Controls |
+|---|---|
+| Live MJPEG from `/image_raw` | Start/stop `rosbag2` recording, with live size and elapsed |
+| Publisher rate, resolution, encoding | Snapshot the current frame to disk |
+| Calibration loaded / not | Inject a CAN frame (id + payload) |
+| Power mode, CPU, GPU, SoC temp, disk free | |
+| Live CAN frame table with ID/DLC/data/flags | |
+
+This is **not** a Foxglove or `rqt` replacement — those visualise topics and do it better.
+The console exists for the part they don't do: triggering recordings, capturing stills and
+putting frames on the bus, from one page, on a headless board.
+
+Two details worth calling out:
+
+- It reports the **publisher's** frame rate, which the camera node measures and publishes on
+  `publish_rate` — not the rate the console itself receives. A Python subscriber
+  deserialising ~6 MB frames reads about 9 Hz against an actual 60 Hz, so a console that
+  timed its own arrivals would understate the pipeline by 6x. Both numbers are shown, and
+  labelled for what they are.
+- **No new dependencies.** `rclpy`, `cv2` and the Python standard library only. The
+  container has no flask/fastapi and no ROS web packages, and with no Humble binaries for
+  Ubuntu 20.04 every addition would have meant a source build.
+
 ## Packages
 
 | Package | Purpose |

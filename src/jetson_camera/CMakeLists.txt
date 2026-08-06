@@ -13,6 +13,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(camera_info_manager REQUIRED)
 
@@ -27,6 +28,7 @@ target_link_libraries(argus_camera_node PkgConfig::GST)
 ament_target_dependencies(argus_camera_node
   rclcpp
   sensor_msgs
+  std_msgs
   image_transport
   camera_info_manager
 )

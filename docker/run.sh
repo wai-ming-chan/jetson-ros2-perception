@@ -34,6 +34,9 @@ IMAGE="${IMAGE:-jetson-ros2-perception:latest}"
 WORKSPACE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CAPTURES="${CAPTURES:-$HOME/captures}"
 
+# /var/lib/nvpmodel is mounted read-only so the operator console can report the
+# active power mode; without it the panel shows "unknown" rather than 15W/7W.
+
 mkdir -p "$CAPTURES"
 
 # X11 forwarding, for tools that need a window -- cameracalibrator above all, since its
@@ -73,6 +76,7 @@ exec docker run -it --rm \
     -v /tmp/argus_socket:/tmp/argus_socket \
     -v "$WORKSPACE:/workspace" \
     -v "$CAPTURES:/captures" \
+    -v /var/lib/nvpmodel:/var/lib/nvpmodel:ro \
     "${GUI_ARGS[@]}" \
     "$IMAGE" \
     "$@"

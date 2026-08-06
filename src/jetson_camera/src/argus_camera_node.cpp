@@ -26,6 +26,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <std_msgs/msg/float32.hpp>
 
 namespace jetson_camera
 {
@@ -56,6 +57,10 @@ public:
       this, "imx477", camera_info_url);
 
     publisher_ = image_transport::create_camera_publisher(this, "image_raw");
+    // Publish the measured rate so consumers report the PUBLISHER's throughput
+    // rather than their own. A Python subscriber deserialising 6 MB frames reads
+    // far below line rate and would otherwise misreport the pipeline as slow.
+    rate_publisher_ = create_publisher<std_msgs::msg::Float32>("publish_rate", 10);
 
     start_pipeline();
     capture_thread_ = std::thread(&ArgusCameraNode::capture_loop, this);
@@ -165,9 +170,14 @@ private:
 
     const double elapsed = (current - last_report_).seconds();
     if (elapsed >= report_interval_s_) {
+      const double hz = static_cast<double>(frames_since_report_) / elapsed;
       RCLCPP_INFO(
         get_logger(), "publisher: %.2f Hz (%ld frames in %.1f s)",
-        static_cast<double>(frames_since_report_) / elapsed, frames_since_report_, elapsed);
+        hz, frames_since_report_, elapsed);
+
+      std_msgs::msg::Float32 rate_msg;
+      rate_msg.data = static_cast<float>(hz);
+      rate_publisher_->publish(rate_msg);
       frames_since_report_ = 0;
       last_report_ = current;
     }
@@ -247,6 +257,7 @@ private:
 
   std::shared_ptr<camera_info_manager::CameraInfoManager> camera_info_manager_;
   image_transport::CameraPublisher publisher_;
+  rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr rate_publisher_;
 };
 
 }  // namespace jetson_camera
