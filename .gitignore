@@ -41,3 +41,6 @@ venv/
 # Credentials
 *.env
 .env.*
+
+# Calibration sample images (large; ost.yaml is extracted into config/)
+calibrationdata*.tar.gz

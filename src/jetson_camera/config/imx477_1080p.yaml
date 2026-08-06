@@ -1,0 +1,40 @@
+# Intrinsic calibration for the IMX477 at 1920x1080.
+#
+# Produced with camera_calibration (8x6 interior corners) on 43 samples, 2026-08-06.
+# Source images are kept in calibrationdata.tar.gz (gitignored) so this can be re-solved
+# without re-shooting.
+#
+# RESOLUTION-SPECIFIC. These values are valid only for 1920x1080. The sensor's other mode,
+# 3840x2160, has roughly double fx/fy/cx/cy for the same field of view -- using this file
+# there produces silently wrong geometry, not an error. Calibrate 4K separately into its
+# own file if it is ever needed.
+#
+# camera_name must match the name passed to CameraInfoManager in argus_camera_node
+# ("imx477"). camera_calibration writes "narrow_stereo" by default, which would be
+# rejected on load.
+image_width: 1920
+image_height: 1080
+camera_name: imx477
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [1285.44831,    0.     ,  961.3906 ,
+            0.     , 1286.70674,  553.83433,
+            0.     ,    0.     ,    1.     ]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.011777, -0.038852, -0.000768, 0.001565, 0.000000]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1., 0., 0.,
+         0., 1., 0.,
+         0., 0., 1.]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [1277.39148,    0.     ,  964.47381,    0.     ,
+            0.     , 1287.29272,  552.7887 ,    0.     ,
+            0.     ,    0.     ,    1.     ,    0.     ]

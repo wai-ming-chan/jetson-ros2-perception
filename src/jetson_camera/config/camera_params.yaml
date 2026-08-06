@@ -32,5 +32,6 @@
     # calibration would be destroyed the moment the container exits. /workspace is the
     # repo bind-mount, so writes land in git-tracked source on the host.
     #
-    # The file need not exist yet -- the node warns on every launch until it does.
-    camera_info_url: "file:///workspace/src/jetson_camera/config/imx477.yaml"
+    # NOTE the _1080p suffix: intrinsics are resolution-specific. Switching width/height
+    # means switching this file too, or the geometry is silently wrong.
+    camera_info_url: "file:///workspace/src/jetson_camera/config/imx477_1080p.yaml"
