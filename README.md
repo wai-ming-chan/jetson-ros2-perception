@@ -1,9 +1,9 @@
 # jetson-ros2-perception
 
 The software base layer a robot needs before any autonomy is possible — sensors
-publishing at full rate, drivers that recover instead of freezing, an industrial bus on
-the wire, one-click data capture, and a live view of what the machine sees — built and
-validated end to end on an NVIDIA Jetson.
+publishing at full rate, drivers that recover instead of freezing, GPU perception keeping
+pace with the camera, an industrial bus on the wire, one-click data capture, and a live
+view of what the machine sees — built and validated end to end on an NVIDIA Jetson.
 
 Concretely:
 
@@ -11,6 +11,12 @@ Concretely:
   hardware ISP (Argus/GStreamer). Publishes `sensor_msgs/Image` and `CameraInfo` at a
   sustained 1920×1080 @ 60 Hz, with capture-stall detection, automatic pipeline
   recovery, and fail-fast shutdown for supervised restart (launch respawn / systemd).
+- **GPU object detection (`trt_detector`)** — YOLOv8 exported to ONNX and compiled
+  on-device to a **TensorRT** FP16 engine, run from a C++ node on the live camera stream:
+  80-class detection at **38 Hz**, **24.7 ms** end to end (preprocess → inference → NMS →
+  publish), emitting `vision_msgs/Detection2DArray` and an annotated overlay. Manages its
+  own **CUDA** stream, device buffers and pinned host memory; FP16 measured 1.8× faster
+  than FP32 (7.5 vs 13.4 ms GPU compute).
 - **Operator console (`operator_console`)** — browser-based operations UI served from the
   board: live video, node and host telemetry (publish rate, CPU/GPU load, power mode,
   SoC temperature), CAN frame TX/RX, and rosbag2 record control. Python standard library
