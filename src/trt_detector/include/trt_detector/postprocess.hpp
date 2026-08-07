@@ -1,3 +1,6 @@
+// Copyright 2026 wai-ming
+// SPDX-License-Identifier: Apache-2.0
+
 // YOLOv8 postprocessing, split from the node so it can be unit-tested without TensorRT.
 //
 // The node's hard-to-eyeball logic lives here: the planar output-tensor indexing

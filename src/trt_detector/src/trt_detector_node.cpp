@@ -1,3 +1,6 @@
+// Copyright 2026 wai-ming
+// SPDX-License-Identifier: Apache-2.0
+
 // TensorRT object detection node for the Jetson perception stack.
 //
 // Consumes raw bgr8 frames from the camera driver, runs a YOLOv8 engine, and publishes

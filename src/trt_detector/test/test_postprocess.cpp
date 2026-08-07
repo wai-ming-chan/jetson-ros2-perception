@@ -1,3 +1,6 @@
+// Copyright 2026 wai-ming
+// SPDX-License-Identifier: Apache-2.0
+
 // Unit tests for YOLOv8 postprocessing. These run on CI (x86, no GPU) and on-target.
 //
 // The planar indexing and letterbox inverse are exactly the kind of arithmetic that a

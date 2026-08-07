@@ -17,6 +17,10 @@ setup(
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
     ],
     install_requires=['setuptools'],
+    # Signals colcon to run these tests with pytest. Without it, colcon falls back to
+    # unittest discovery, which finds none of the pytest-style test functions and
+    # reports "Ran 0 tests" as a pass -- a green CI that tests nothing.
+    tests_require=['pytest'],
     zip_safe=True,
     maintainer='wai-ming',
     maintainer_email='waiming@galeelee.com',

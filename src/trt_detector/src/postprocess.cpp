@@ -1,3 +1,6 @@
+// Copyright 2026 wai-ming
+// SPDX-License-Identifier: Apache-2.0
+
 #include "trt_detector/postprocess.hpp"
 
 #include <algorithm>

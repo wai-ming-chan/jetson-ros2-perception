@@ -1,3 +1,6 @@
+// Copyright 2026 wai-ming
+// SPDX-License-Identifier: Apache-2.0
+
 // Argus-backed camera driver for NVIDIA Jetson.
 //
 // Pulls frames from nvarguscamerasrc through a GStreamer appsink and republishes them as
