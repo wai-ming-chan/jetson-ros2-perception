@@ -547,7 +547,94 @@ metric 3D work** -- 3 px reprojection error becomes centimetres of position erro
 - **Verified:** zombie stream reaped within 9 s; `Send-Q` 0 for a client that keeps up;
   28–39 fps delivered with the publisher steady at 60 Hz.
 
-#### Issue 15 — `timeout` on `ros2 bag record` produces an empty bag
+#### Issue 9 — multipart MJPEG endpoint sent headers, then nothing; root cause never found
+
+- **Date:** 2026-08-06
+- **Symptom:** browsers showed a few frames then froze (Mac *and* a browser on the Jetson
+  itself, ruling out the network — TCP retransmit stats had pointed there first and were a
+  red herring). A test client that parsed the multipart stream properly and *decoded* each
+  JPEG received the response headers and then **no body at all**.
+- **Why earlier tests missed it:** they counted `--FRAME` boundary strings and never
+  decoded a JPEG — 620 frames were "delivered" to a client that never rendered one. Same
+  failure class as `ros2 topic hz` and the calibration RMS: a proxy measurement that
+  cannot fail the way the real consumer does.
+- **Resolution:** replaced, not diagnosed — recorded honestly. The UI long-polls
+  `/frame.jpg?since=<seq>`: the server answers when a frame newer than `<seq>` exists, so
+  the client cannot fall behind and every round trip carries a fresh frame.
+- **The ceiling behind the ceiling:** with delivery fixed, the console's Python subscriber
+  deserialising 6.2 MB raw frames became the limit (13–50 Hz, erratic). The console now
+  consumes `/image_raw/compressed` (~200 KB, encoded in C++ by image_transport): console
+  CPU 55% → 13%, ~30 fresh fps to the browser.
+- **Second tradeoff found by measuring:** the compressed plugin encodes synchronously in
+  the camera's capture loop — publisher 60 → ~36 Hz while subscribed. The console
+  subscribes on demand (unsubscribes 5 s after the last browser request); verified:
+  idle 60.3 Hz → streaming 35.7 Hz → recovery within seconds of the viewer leaving.
+
+#### Issue 10 — camera node could freeze silently (audit findings)
+
+- **Date:** 2026-08-06. Prompted by intermittent freezes; audit found three defects.
+- **1. Unbounded block:** `gst_app_sink_pull_sample()` never returns if the pipeline
+  wedges (nvargus-daemon dying is a known L4T failure). The node stayed "alive" —
+  services answering, topics present — while publishing nothing.
+- **2. Zombie on stream end:** on a NULL sample the capture thread exited silently but
+  the node kept running, unrestartable by any supervisor. Observed live: a CaptureSession
+  conflict logged once, then hours of nothing.
+- **3. Misleading success log:** "camera streaming at ..." printed before any frame
+  existed (`set_state` returns ASYNC), so startup looked healthy even when capture failed.
+- **Fixes:** bounded pull (`try_pull_sample`, 1 s) with a stall watchdog; pipeline
+  teardown+rebuild with bounded retries and backoff; a cap on consecutive rebuilds that
+  yield no frame; **clean non-zero exit when unrecoverable** so launch respawn / systemd
+  `Restart=on-failure` can act; success logged only on the first published frame.
+- **Lesson:** a node that cannot make progress should die loudly, not idle convincingly.
+
+#### Issue 11 — 1 Hz to the Mac browser, 17 Hz locally: Energy-Efficient Ethernet
+
+- **Date:** 2026-08-06
+- **Symptom:** the operator console streamed at 17 Hz in a browser on the Jetson but
+  **1 Hz** on the Mac over the direct Ethernet link — while bulk transfers over the same
+  link ran at 300 Mbit/s.
+- **Diagnosis:** paced single-frame fetches from idle told the story:
+  `1.007s  1.007s  0.006s  0.006s` — a link that is fast once moving but stalls ~1 s
+  waking from idle is **EEE / 802.3az**. Both PHYs had negotiated it; the browser's
+  long-poll leaves ~60 ms gaps, so every frame paid the wake penalty. Bulk traffic never
+  idles, which is why throughput tests exonerated the link. Confirmed before any fix by a
+  background `ping -i 0.2` eliminating the stalls.
+- **Solution:** `ethtool --set-eee eth0 eee off` — which printed `eee unmodified,
+  ignoring` **and still applied**; verify with `--show-eee`, not the command output.
+  Persisted via `deploy/systemd/jetson-eee-off.service`.
+- **Lesson:** for idle-gapped traffic (interactive streams, DDS discovery), test with
+  paced single transfers from idle, never bulk throughput.
+
+#### Issue 12 — detector received zero frames: kernel socket buffers vs 6.2 MB messages
+
+- **Date:** 2026-08-06
+- **Symptom:** the TensorRT node subscribed to `/image_raw` (best-effort) and received
+  nothing at all; a RELIABLE subscriber limped at 3.2 Hz.
+- **Root cause:** `net.core.rmem_max` defaults to **208 KB** — 1/30th of one raw frame.
+  CycloneDDS fragments each 6.2 MB message into thousands of datagrams; the buffer
+  overflows mid-message, and best-effort drops the whole frame on any lost fragment.
+- **Solution (both halves required):** host `sysctl` raising rmem/wmem to 64 MB
+  (persisted in `deploy/sysctl/60-ros2-dds.conf`), **and** CycloneDDS requesting the
+  larger buffer (`docker/cyclonedds.xml`, wired via `CYCLONEDDS_URI`).
+- **Verified:** best-effort delivery 0 Hz → full rate; the camera held 60 Hz with the
+  detector subscribed where it previously collapsed to 29.3 Hz.
+- **Lesson:** ROS 2 does not tune the kernel. "Publishes but nobody receives" on a large
+  topic → check `rmem_max` first.
+
+#### Issue 13 — stale Argus sessions: fast respawn digs the hole deeper
+
+- **Date:** 2026-08-06
+- **Symptom:** after a camera node exited via the bounded-shutdown path, every relaunch
+  failed with `Failed to create CaptureSession`, nvargus-daemon at 11% CPU.
+- **Root cause chain:** a force-exit cannot release its Argus session; the daemon
+  garbage-collects slowly, and a 2 s launch respawn outran that cleanup — each doomed
+  attempt created another half-session until only a daemon restart recovered it.
+- **Solution:** respawn delay raised to 15 s; rebuild backoff 2→10 s; runbook rule:
+  restart nvargus-daemon after any unclean Argus client exit.
+- **Lesson:** nvargus-daemon is unmanaged shared state; client crashes damage it
+  cumulatively, and retry loops must be slower than its cleanup.
+
+#### Issue 14 — `timeout` on `ros2 bag record` produces an empty bag
 
 - **Date:** 2026-08-07
 - **Symptom:** the replay harness's freshly recorded fixture "replayed" as a zero-length
@@ -560,7 +647,7 @@ metric 3D work** -- 3 px reprojection error becomes centimetres of position erro
 - **Lesson:** a test harness must validate its own fixtures. The failure it produces
   otherwise points at the system under test, which is the most expensive place to look.
 
-#### Issue 16 — cross-container DDS silently broken: Wi-Fi IPv6 rotation
+#### Issue 15 — cross-container DDS silently broken: Wi-Fi IPv6 rotation
 
 - **Date:** 2026-08-07
 - **Symptom:** a fresh container could list the stack's nodes but received no data — and
@@ -575,7 +662,7 @@ metric 3D work** -- 3 px reprojection error becomes centimetres of position erro
 - **Lesson:** on a multi-homed host, DDS interface selection is a reliability decision,
   not a default to inherit. Pin it.
 
-#### Issue 17 — CSI capture failure, progressive: reboot stopped helping
+#### Issue 16 — CSI capture failure, progressive: reboot stopped helping
 
 - **Date:** 2026-08-07 (continues the runbook's §4.2)
 - **Progression observed:** (1) sustained capture triggers `waitCsiFrameEnd` timeouts →
