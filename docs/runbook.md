@@ -116,6 +116,12 @@ ps -o pcpu,etime -C nvargus-daemon      # >20% CPU while idle means degraded
 
 If a restart does not fix it, go to 4.2.
 
+**After any daemon restart, RECREATE camera containers — `docker restart` is not
+enough.** A file bind-mount pins the socket's inode at container *create* time; the
+restarted daemon serves a new inode, and the container keeps talking to the orphaned old
+one (`Failed to create CameraProvider` in the container while capture works on the host).
+`docker stop && docker rm && docker run`, or re-run the bringup.
+
 ### 4.2 Camera stops mid-run
 
 The node retries for about a minute (10 rebuilds with 2→10 s backoff), which covers a
@@ -152,6 +158,11 @@ cd ~/jetson-ros2-perception && sudo deploy/install.sh   # only if not yet instal
 ```
 
 Prevention: rules 1–3 in section 1. Every unclean client exit makes this more likely.
+
+**If a fresh boot fails on the FIRST capture attempt**, software is exonerated — the
+same signature (sustained capture fails, 2–3-frame grabs succeed) with no state to blame
+points at the physical CSI link. Power off completely and reseat the ribbon at both ends,
+inspecting for tears near the stiffeners. Never connect or disconnect CSI hot.
 
 ### 4.3 Node will not shut down
 
