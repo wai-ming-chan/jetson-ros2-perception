@@ -547,6 +547,56 @@ metric 3D work** -- 3 px reprojection error becomes centimetres of position erro
 - **Verified:** zombie stream reaped within 9 s; `Send-Q` 0 for a client that keeps up;
   28–39 fps delivered with the publisher steady at 60 Hz.
 
+#### Issue 15 — `timeout` on `ros2 bag record` produces an empty bag
+
+- **Date:** 2026-08-07
+- **Symptom:** the replay harness's freshly recorded fixture "replayed" as a zero-length
+  loop — the player reopening the database ten times a second — and the detector under
+  test reported nothing.
+- **Root cause:** `timeout`'s default signal is SIGTERM, and rosbag2 finalises its
+  database only on SIGINT. A SIGTERM-truncated bag is structurally valid and empty.
+- **Solution:** `timeout --signal=INT`, plus a message-count check on the fixture so an
+  empty bag fails at the cause instead of as a mysterious downstream timeout.
+- **Lesson:** a test harness must validate its own fixtures. The failure it produces
+  otherwise points at the system under test, which is the most expensive place to look.
+
+#### Issue 16 — cross-container DDS silently broken: Wi-Fi IPv6 rotation
+
+- **Date:** 2026-08-07
+- **Symptom:** a fresh container could list the stack's nodes but received no data — and
+  only the camera node (which had respawned hours earlier) was missing from `ros2 node
+  list`, while its longer-lived siblings remained visible.
+- **Root cause:** CycloneDDS binds interface addresses at participant creation and ranked
+  the Wi-Fi dongle highest. Its IPv6 privacy addresses rotate; the respawned camera bound
+  addresses that later peers could not reach.
+- **Solution:** `ROS_LOCALHOST_ONLY=1` (set in `docker/run.sh`). Every DDS participant in
+  this system lives on one host — the Mac speaks HTTP to the console, not DDS — so
+  loopback is strictly correct, and immune to interface churn.
+- **Lesson:** on a multi-homed host, DDS interface selection is a reliability decision,
+  not a default to inherit. Pin it.
+
+#### Issue 17 — CSI capture failure, progressive: reboot stopped helping
+
+- **Date:** 2026-08-07 (continues the runbook's §4.2)
+- **Progression observed:** (1) sustained capture triggers `waitCsiFrameEnd` timeouts →
+  nvargus-daemon SIGSEGV, recovered by daemon restart; (2) failures persist through
+  daemon restarts, cleared by reboot (8 stable hours followed); (3) next day, the
+  **first capture attempt after a fresh boot** fails the same way. Short 2–3-frame
+  captures still succeed; sustained 60 fps does not.
+- **Software eliminated:** same kernel, same image, same code that ran overnight; clean
+  boot; daemon healthy until first sustained capture.
+- **Diagnosis:** physical layer — CSI ribbon seating/damage is the leading suspect, with
+  handling and thermal cycling as aggravators. Fix attempt: power off, reseat both ends,
+  inspect for tears. (Outcome recorded here when known.)
+- **Two container-side findings from the same episode:**
+  - `docker restart` does NOT re-resolve a file bind-mount: the socket inode is pinned at
+    container **create**. After any nvargus-daemon restart, containers mounting
+    `/tmp/argus_socket` must be **recreated**, or every Argus call talks to an orphaned
+    socket (`Failed to create CameraProvider` in the container while the host works).
+  - A daemon crash mid-session can segfault the client library too ("Receive thread is
+    not running" → SIGSEGV in the node), which launch respawn absorbs.
+
+
 
 ## Phase 3: Perception + Benchmarks — NOT STARTED
 
