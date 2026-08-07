@@ -38,6 +38,8 @@
 #include <opencv2/imgproc.hpp>
 
 #include <rclcpp/rclcpp.hpp>
+
+#include "trt_detector/postprocess.hpp"
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/float32.hpp>
@@ -73,13 +75,6 @@ public:
       RCLCPP_WARN(rclcpp::get_logger("tensorrt"), "%s", msg);
     }
   }
-};
-
-struct Detection
-{
-  cv::Rect2f box;      // in original image coordinates
-  float score;
-  int class_id;
 };
 
 class TrtDetectorNode : public rclcpp::Node
@@ -247,8 +242,13 @@ private:
     cudaStreamSynchronize(stream_);
     const auto t2 = clock::now();
 
-    // ---- decode + NMS ---------------------------------------------------------------
-    std::vector<Detection> dets = decode(scale, pad_x, pad_y, image.cols, image.rows);
+    // ---- decode + NMS (unit-tested in test/test_postprocess.cpp) --------------------
+    std::vector<Detection> dets = nms(
+      decode_yolov8(
+        host_output_, kNumClasses, kNumAnchors,
+        static_cast<float>(score_threshold_), scale, pad_x, pad_y,
+        image.cols, image.rows),
+      static_cast<float>(nms_iou_));
     const auto t3 = clock::now();
 
     publish_detections(msg.header, dets);
@@ -256,65 +256,6 @@ private:
     const auto t4 = clock::now();
 
     record_timing(t0, t1, t2, t3, t4);
-  }
-
-  std::vector<Detection> decode(
-    float scale, int pad_x, int pad_y, int img_w, int img_h) const
-  {
-    std::vector<Detection> raw;
-    const float * out = host_output_;
-    for (int i = 0; i < kNumAnchors; ++i) {
-      // Planar layout: channel c of anchor i lives at out[c * kNumAnchors + i].
-      int best = -1;
-      float best_score = static_cast<float>(score_threshold_);
-      for (int c = 0; c < kNumClasses; ++c) {
-        const float s = out[(4 + c) * kNumAnchors + i];
-        if (s > best_score) {
-          best_score = s;
-          best = c;
-        }
-      }
-      if (best < 0) {
-        continue;
-      }
-      const float cx = out[0 * kNumAnchors + i];
-      const float cy = out[1 * kNumAnchors + i];
-      const float w = out[2 * kNumAnchors + i];
-      const float h = out[3 * kNumAnchors + i];
-      // Undo the letterbox: network coords -> original image coords.
-      const float x = (cx - w / 2 - pad_x) / scale;
-      const float y = (cy - h / 2 - pad_y) / scale;
-      cv::Rect2f box(x, y, w / scale, h / scale);
-      box &= cv::Rect2f(0, 0, static_cast<float>(img_w), static_cast<float>(img_h));
-      if (box.area() > 0) {
-        raw.push_back({box, best_score, best});
-      }
-    }
-
-    // Greedy class-aware NMS. Hand-rolled to avoid a cv::dnn link dependency for ~25
-    // lines of standard algorithm.
-    std::sort(
-      raw.begin(), raw.end(),
-      [](const Detection & a, const Detection & b) {return a.score > b.score;});
-    std::vector<Detection> kept;
-    std::vector<bool> removed(raw.size(), false);
-    for (size_t i = 0; i < raw.size(); ++i) {
-      if (removed[i]) {
-        continue;
-      }
-      kept.push_back(raw[i]);
-      for (size_t j = i + 1; j < raw.size(); ++j) {
-        if (removed[j] || raw[j].class_id != raw[i].class_id) {
-          continue;
-        }
-        const float inter = (raw[i].box & raw[j].box).area();
-        const float uni = raw[i].box.area() + raw[j].box.area() - inter;
-        if (uni > 0 && inter / uni > static_cast<float>(nms_iou_)) {
-          removed[j] = true;
-        }
-      }
-    }
-    return kept;
   }
 
   void publish_detections(

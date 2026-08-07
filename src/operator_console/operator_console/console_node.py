@@ -20,7 +20,6 @@ import json
 import mimetypes
 import os
 import socket
-import struct
 import subprocess
 import threading
 import time
@@ -36,14 +35,11 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, CompressedImage
 from std_msgs.msg import Float32
 
-# SocketCAN frame layout: can_id (u32), len (u8), 3 pad, data (8 bytes).
-CAN_FRAME_FMT = "<IB3x8s"
-CAN_FRAME_SIZE = struct.calcsize(CAN_FRAME_FMT)
-CAN_EFF_FLAG = 0x80000000
-CAN_RTR_FLAG = 0x40000000
-CAN_ERR_FLAG = 0x20000000
-CAN_SFF_MASK = 0x000007FF
-CAN_EFF_MASK = 0x1FFFFFFF
+from operator_console.canutil import (  # noqa: E402  (pure helpers, unit-tested)
+    CAN_FRAME_SIZE,
+    build_can_frame,
+    parse_can_frame,
+)
 
 
 def deque_hz(dq, lock):
@@ -208,18 +204,10 @@ def can_reader(iface, state, stop_event):
             if len(raw) < CAN_FRAME_SIZE:
                 continue
 
-            can_id, length, data = struct.unpack(CAN_FRAME_FMT, raw)
-            extended = bool(can_id & CAN_EFF_FLAG)
-            entry = {
-                "id": "{:08X}".format(can_id & CAN_EFF_MASK) if extended
-                      else "{:03X}".format(can_id & CAN_SFF_MASK),
-                "ext": extended,
-                "rtr": bool(can_id & CAN_RTR_FLAG),
-                "err": bool(can_id & CAN_ERR_FLAG),
-                "dlc": length,
-                "data": data[:length].hex().upper(),
-                "t": round(time.monotonic(), 3),
-            }
+            entry = parse_can_frame(raw)
+            if entry is None:
+                continue
+            entry["t"] = round(time.monotonic(), 3)
             with state.lock:
                 state.can_frames.appendleft(entry)
                 state.can_count += 1
@@ -229,13 +217,14 @@ def can_reader(iface, state, stop_event):
 
 def can_send(iface, can_id, payload, extended=False):
     """Transmit one frame. Returns None on success, else an error string."""
-    if len(payload) > 8:
-        return "payload longer than 8 bytes"
+    try:
+        frame = build_can_frame(can_id, payload, extended)
+    except ValueError as exc:
+        return str(exc)
     try:
         sock = socket.socket(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
         sock.bind((iface,))
-        ident = can_id | (CAN_EFF_FLAG if extended else 0)
-        sock.send(struct.pack(CAN_FRAME_FMT, ident, len(payload), payload.ljust(8, b"\0")))
+        sock.send(frame)
         sock.close()
     except OSError as exc:
         return str(exc)
@@ -255,8 +244,19 @@ class OperatorConsole(Node):
         self.port = self.declare_parameter("port", 8080).value
         self.can_interface = self.declare_parameter("can_interface", "can0").value
         self.capture_dir = self.declare_parameter("capture_dir", "/captures").value
+        # Record the COMPRESSED stream, not raw. Raw 1080p bgr8 is 6.2 MB/frame; at
+        # 60 Hz that is ~370 MB/s and fills a 90 GB disk in about four minutes. The
+        # compressed topic is ~250 KB/frame -- ~15 MB/s -- and is what any downstream
+        # consumer wants anyway. Recording it also makes rosbag2 a subscriber, which is
+        # what causes the camera to encode at all (the plugin is lazy).
         self.record_topics = self.declare_parameter(
-            "record_topics", ["/image_raw", "/camera_info"]).value
+            "record_topics",
+            ["/image_raw/compressed", "/camera_info", "/trt_detector/detections"]).value
+        # Refuse to start below this much free space. Without a floor, a forgotten
+        # recording fills the disk and takes the whole stack down with it.
+        self.min_free_gb = float(self.declare_parameter(
+            "record_min_free_gb", 5.0,
+            ParameterDescriptor(dynamic_typing=True)).value)
         self.rate_topic = self.declare_parameter(
             "rate_topic", "/argus_camera/publish_rate").value
 
@@ -354,6 +354,10 @@ class OperatorConsole(Node):
         with self.state.lock:
             if self.state.recording and self.state.recording.poll() is None:
                 return "already recording"
+        free = disk_free_gb(self.capture_dir)
+        if free is not None and free < self.min_free_gb:
+            return "only {:.1f} GB free (need {:.1f})".format(free, self.min_free_gb)
+
         stamp = time.strftime("%Y%m%d_%H%M%S")
         path = os.path.join(self.capture_dir, "rosbag2_" + stamp)
         cmd = ["ros2", "bag", "record", "-o", path] + list(self.record_topics)

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container: ros:humble
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential \
+            libopencv-dev \
+            python3-opencv \
+            python3-pytest \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            ros-humble-vision-msgs \
+            ros-humble-image-transport \
+            ros-humble-camera-info-manager \
+            ros-humble-ament-cmake-gtest
+
+      # The CI runner is x86_64 with no GPU: TensorRT is absent, so trt_detector builds
+      # only its postprocess library and unit tests (the CMakeLists degrades on purpose),
+      # while every other package builds in full. This mirrors the target split: logic is
+      # tested here; the inference path is exercised by test/on_target/ on the Jetson.
+      - name: Build
+        run: |
+          . /opt/ros/humble/setup.sh
+          colcon build --event-handlers console_cohesion+
+
+      - name: Test
+        run: |
+          . /opt/ros/humble/setup.sh
+          colcon test --event-handlers console_cohesion+
+          colcon test-result --verbose

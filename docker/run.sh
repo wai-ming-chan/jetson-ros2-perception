@@ -40,6 +40,12 @@ IMAGE="${IMAGE:-jetson-ros2-perception:latest}"
 WORKSPACE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CAPTURES="${CAPTURES:-$HOME/captures}"
 
+# ROS_LOCALHOST_ONLY pins DDS to loopback. Every ROS participant here lives on this
+# host (the Mac talks HTTP to the console, not DDS), and without the pin CycloneDDS
+# binds whichever interface ranks highest -- the Wi-Fi dongle, whose rotating IPv6
+# privacy addresses left a respawned camera node undiscoverable by new containers
+# while its 8-hour-old siblings remained visible.
+#
 # /var/lib/nvpmodel is mounted read-only so the operator console can report the
 # active power mode; without it the panel shows "unknown" rather than 15W/7W.
 # ~/models holds ONNX files and locally-built TensorRT engines (device-specific,
@@ -79,6 +85,7 @@ fi
 
 exec docker run -it --rm \
     -e CYCLONEDDS_URI=file:///workspace/docker/cyclonedds.xml \
+    -e ROS_LOCALHOST_ONLY=1 \
     --network host \
     --ipc host \
     --device /dev/video0 \
