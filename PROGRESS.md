@@ -673,8 +673,11 @@ metric 3D work** -- 3 px reprojection error becomes centimetres of position erro
 - **Software eliminated:** same kernel, same image, same code that ran overnight; clean
   boot; daemon healthy until first sustained capture.
 - **Diagnosis:** physical layer — CSI ribbon seating/damage is the leading suspect, with
-  handling and thermal cycling as aggravators. Fix attempt: power off, reseat both ends,
-  inspect for tears. (Outcome recorded here when known.)
+  handling and thermal cycling as aggravators.
+- **RESOLVED by reseating the ribbon** (both ends, board powered off). Immediately after:
+  sustained 120-frame host capture clean, stack at 59 Hz camera / 34 Hz detection, and
+  the bag-replay regression passed end to end. Confirms the connector, not software —
+  and validates the ladder: daemon restart → reboot → reseat.
 - **Two container-side findings from the same episode:**
   - `docker restart` does NOT re-resolve a file bind-mount: the socket inode is pinned at
     container **create**. After any nvargus-daemon restart, containers mounting

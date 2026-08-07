@@ -31,7 +31,7 @@ Concretely:
   load across sensor modes and power profiles; results and methodology in the benchmark
   table below.
 
-*Next:* a SocketCAN ↔ ROS 2 bridge node, and a bag-replay regression harness in CI.
+*Next:* a SocketCAN ↔ ROS 2 bridge node, and 7W benchmark rows.
 
 > **Scope:** this stack runs on real Jetson hardware, but it is not deployed on a mobile
 > robot — there is no drivetrain and no autonomous navigation. Every number below was
@@ -59,6 +59,20 @@ Two hardware constraints shape everything below:
   both `RG10` raw Bayer. There is no 12 MP mode.
 - Only **7W and 15W** power modes exist on JetPack 5. The 25W/MAXN SUPER mode is
   JetPack 6.2-exclusive, so benchmarks have two power points.
+
+## Testing
+
+Two tiers, split by what each environment can honestly exercise:
+
+- **CI** ([GitHub Actions](.github/workflows/ci.yml), `ros:humble`, x86): builds all four
+  packages and runs the unit tests — the detector's tensor decode, letterbox inverse and
+  NMS pinned against hand-computed values, and the CAN frame codec. `trt_detector`'s build
+  degrades deliberately without TensorRT so its logic is tested where its GPU cannot be.
+- **On-target** ([`test/on_target/replay_regression.sh`](test/on_target/replay_regression.sh)):
+  records a fixture bag from the live camera, replays it through a fresh detector in an
+  isolated namespace, and asserts the detector's self-reported rate and latency.
+  Verified passing: 19.9 Hz / 23.7 ms against 10 Hz / 60 ms thresholds, alongside a
+  running production stack.
 
 ## Operations
 
